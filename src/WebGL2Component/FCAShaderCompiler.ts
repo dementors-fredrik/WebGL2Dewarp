@@ -9,7 +9,7 @@ enum FCAGLShaderTypes {
     attribute = 'in',
 }
 
-type FCAGLBindingMap = { [FCAGLShaderTypes.uniform]?: FCAGLUniformType, [FCAGLShaderTypes.attribute]?: FCAGLAttributeType };
+export type FCAGLBindingMap = { [FCAGLShaderTypes.uniform]?: FCAGLUniformType, [FCAGLShaderTypes.attribute]?: FCAGLAttributeType };
 type FCAGLGenericType = FCAGLUniformType | FCAGLAttributeType;
 
 const linkBindings = (bindings: FCAGLBindingMap, type: FCAGLShaderTypes, resolver: (name: string, atype: string) => FCAGLAttributeProps | FCAGLUniformProps | null) => {
