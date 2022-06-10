@@ -27,12 +27,6 @@ const linkBindings = (bindings: FCAGLBindingMap, type: FCAGLShaderTypes, resolve
     }
 };
 
-const uniformTypeMapper: Record<string, string> = {
-    'float': 'uniform1f',
-    'vec2': 'uniform1v',
-    'vec3': 'uniform1v'
-}
-
 export const shaderCompiler = (ctx: WebGL2RenderingContext) => {
     const vsSource = `#version 300 es
     in vec4 a_position;
@@ -91,7 +85,7 @@ export const shaderCompiler = (ctx: WebGL2RenderingContext) => {
 
         linkBindings(bindings, FCAGLShaderTypes.uniform, (name, type) => {
             const loc = ctx.getUniformLocation(program, name)
-            const target = uniformTypeMapper[type];
+            const target = type;
             const ictx = ctx as any;
 
             return loc ? {

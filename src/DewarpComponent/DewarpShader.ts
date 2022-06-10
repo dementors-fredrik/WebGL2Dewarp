@@ -6,13 +6,14 @@ uniform sampler2D u_texture;
 in vec2 size;                 /// native resolution, x is width, y is height
 float tangentOfFieldOfView = 0.4; /// The desired field of view (zoom level)
 uniform float lambdaOffset;         /// Offset for the lambda value
-//uniform vec3 rotateData;            /// Data used for rotating the image depending on pan, tilt and placement
+uniform vec3 rotateData;            /// Data used for rotating the image depending on pan, tilt and placement
 //uniform vec4 LensProfile;           /// The profile for the current lens
 //uniform mat4 u_matrix;
 
 vec4 LensProfile = vec4(113.889694, -60.882477, 751.488831, 0.0);
-vec3 rotateData = vec3(5.8,0.25,0.8); //vec3(4.109286700809463, -0.9885839816668688, 0.8351400470792861);
+//vec3 rotateData = vec3(5.8,0.25,0.8); //vec3(4.109286700809463, -0.9885839816668688, 0.8351400470792861);
 in vec2 uv;
+//vec3(5.8,0.25,0.8); //
 
 out vec4 fragColor;
 
@@ -83,7 +84,7 @@ vec2 CalcRotate(float theta, float lambda)
 
 void main(void)
 {
-    vec2 sep = (uv - 0.5) * size;
+  vec2 sep = (uv - 0.5) * size;
 
   // The theta and lambda of a ray passing from the eye through the near plane
   float theta = CalcTheta(sep);
@@ -100,10 +101,9 @@ void main(void)
   float taby = .5 + radiusProfile * sin(lambda) / size.y;
 
   if(tabx >= 1.0 || taby >= 1.0 || tabx < 0.0 || taby < 0.0) {
-    fragColor = vec4(0.0, 1.0, 0.0, 1.0);
+    fragColor = vec4(0.0, 0.0, 0.0, 1.0);
   } else {
-  //    fragColor = vec4(0.0, 0.0, 1.0, 1.0);
-      fragColor = vec4(texture(u_texture, vec2(tabx, taby) /*uv*/).rgb, 1.0);
+    fragColor = vec4(texture(u_texture, vec2(tabx, taby) /*uv*/).rgb, 1.0);
   }
 }`;
 
