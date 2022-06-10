@@ -2,10 +2,12 @@ import React, {useEffect, useImperativeHandle, useRef, useState} from "react";
 import {FCAGLBindingMap, shaderCompiler} from "./FCAShaderCompiler";
 import {mat4} from 'gl-matrix';
 import {dewarpFragmentShader, dewarpVertexShader} from "./DewarpShader";
-type FCAGLPipeline = { submitFrame: (video: HTMLVideoElement) => void, stopRender: () => void};
-const SCALE_FACTOR = 1;
 
-const vsSource = `#version 300 es
+type FCAGLPipeline = { startDewarp: (video: HTMLVideoElement) => void, stopRender: () => void };
+const DOWNSCALE_FACTOR = 2;
+const BUFFER_SIZE = 1024/DOWNSCALE_FACTOR;
+
+const postProcessFragmentShader = `#version 300 es
     in vec4 a_position;
     in vec2 a_texcoord;
     
@@ -19,7 +21,7 @@ const vsSource = `#version 300 es
     }
 `;
 
-const fsSource = `#version 300 es
+const postProcessVertexShader = `#version 300 es
     precision highp float;
      
     in vec2 v_texcoord;
@@ -42,7 +44,7 @@ const createVAO = (gl: WebGL2RenderingContext, bindings: FCAGLBindingMap) => {
 
     gl.enableVertexAttribArray(bindings.in!.a_position.address!);
     gl.vertexAttribPointer(bindings.in!.a_position.address!, 2, gl.FLOAT, false, 0, 0);
-    if(bindings!.in!.a_texcoord) {
+    if (bindings!.in!.a_texcoord) {
         gl.enableVertexAttribArray(bindings!.in!.a_texcoord.address!);
         gl.vertexAttribPointer(bindings!.in!.a_texcoord.address!, 2, gl.FLOAT, true, 0, 0);
     }
@@ -53,7 +55,6 @@ const createProjectionMatrix = (w: number, h: number, x?: number, y?: number) =>
     let m = mat4.create();
     mat4.ortho(m, 0, w, h, 0, -1, 1);
     mat4.translate(m, m, [x || 0, y || 0, 0]);
-    mat4.scale(m, m, [w, h, 1]);
     return m;
 }
 
@@ -64,22 +65,28 @@ type FCAGLTextureObject = {
     height: number;
 }
 
-const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivElement):{ stopRender: () => void; submitFrame: (frame: HTMLVideoElement) => void; shutdown: () => void } => {
+export type FCADewarpHandle =
+    { stopRender: () => void; startDewarp: (frame: HTMLVideoElement) => void; shutdown: () => void }
+
+
+const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivElement): FCADewarpHandle => {
     const compiler = shaderCompiler(gl);
-    const {program: dewarpProgram, bindings: dewarpBindings} = compiler.compileProgram({ vertexShader: dewarpVertexShader, fragmentShader: dewarpFragmentShader});
-    const {program: p2, bindings: b2} = compiler.compileProgram({ vertexShader: vsSource, fragmentShader: fsSource});
+    const {
+        program: dewarpProgram,
+        bindings: dewarpBindings
+    } = compiler.compileProgram({vertexShader: dewarpVertexShader, fragmentShader: dewarpFragmentShader});
+    const {program: postProcessProgram, bindings: postProcessBindings} = compiler.compileProgram({vertexShader: postProcessFragmentShader, fragmentShader: postProcessVertexShader});
 
     const vaoObj = createVAO(gl, dewarpBindings);
-    const vaoObj2 = createVAO(gl, b2);
+    const vaoObj2 = createVAO(gl, postProcessBindings);
 
-    const drawQuad = (vao: any, bindings: FCAGLBindingMap, programSetup: (gl: WebGL2RenderingContext) => void, tex: FCAGLTextureObject , fbo: WebGLFramebuffer | null, textureUnit: GLenum) => {
-        const bbox = container.getBoundingClientRect();
-        const w = bbox.width - bbox.left;
-        const h = bbox.height - bbox.top;
-
-        gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
-
-        gl.viewport(0, 0, w, h);
+    const drawQuad = (vao: any, bindings: FCAGLBindingMap, programSetup: (gl: WebGL2RenderingContext) => void, tex: FCAGLTextureObject, fbo: FAGLFBOObject | null, textureUnit: GLenum) => {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fbo ? fbo.fbo : null);
+        if(fbo?.texObject) {
+            gl.viewport(0, 0, fbo.texObject.width, fbo.texObject.height);
+        } else {
+            gl.viewport(0,0,gl.canvas.width, gl.canvas.height);
+        }
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -87,20 +94,20 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
 
         gl.bindVertexArray(vao.vao);
 
-        gl.activeTexture( textureUnit);
+        gl.activeTexture(textureUnit);
         gl.bindTexture(gl.TEXTURE_2D, tex.tex);
 
-        if(bindings.uniform!.u_matrix) {
-            const matrix = createProjectionMatrix(w, h);
+        if (bindings.uniform!.u_matrix) {
+            const matrix = createProjectionMatrix(downsampleBuffer.width, downsampleBuffer.height, 0, 0);
+            mat4.scale(matrix, matrix, [downsampleBuffer.width, downsampleBuffer.height, 1]);
+
             gl.uniformMatrix4fv(bindings.uniform!.u_matrix.address, false, matrix);
         }
 
         gl.drawArrays(gl.TRIANGLES, 0, vao.verticies);
     }
 
-    const createTexture = () => {
-        const w = 1920;
-        const h = 1080;
+    const createTexture = (w: number, h:number) => {
         const tex = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, tex);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -108,52 +115,74 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-        return { tex: tex, width: w, height: h };
+        return {tex: tex, width: w, height: h};
     }
 
-    const createFBO = () => {
-        const textureObject = createTexture();
+    type FAGLFBOObject = {fbo: WebGLFramebuffer, texObject: FCAGLTextureObject};
+
+    const createFBO = (w: number, h: number) : FAGLFBOObject => {
+        const textureObject = createTexture(w,h);
         const fb = gl.createFramebuffer();
         gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
         gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, textureObject.tex, 0)
-        return { fbo: fb, texObject: textureObject };
+        return {fbo: fb!, texObject: textureObject};
     };
 
-    const frameTexture = createTexture();
-    const dewarpFBO = createFBO() ;
+    const downsampleBuffer = document.createElement('canvas');
+    const downsampleContext = downsampleBuffer.getContext("2d");
+    downsampleBuffer.width = BUFFER_SIZE;
+    downsampleBuffer.height = BUFFER_SIZE;
 
-    const updateTexture = (v: HTMLVideoElement) => {
+    const frameTexture = createTexture(downsampleBuffer.width, downsampleBuffer.height);
+    const dewarpFBO = createFBO(downsampleBuffer.width, downsampleBuffer.height);
+
+    const updateTexture = (v: HTMLVideoElement | HTMLCanvasElement, w: number, h: number) => {
         gl.bindTexture(gl.TEXTURE_2D, frameTexture.tex);
-        frameTexture.width = v.videoWidth/SCALE_FACTOR;
-        frameTexture.height = v.videoHeight/SCALE_FACTOR;
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, frameTexture.width, frameTexture.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, v);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, v);
     }
 
-    let frameSource : HTMLVideoElement | null = null;
-
-
-
+    let frameSource: HTMLVideoElement | null = null;
 
     const updateRender = () => {
-        if(frameSource) {
+        if (frameSource) {
             const bbox = container.getBoundingClientRect();
             const w = bbox.width - bbox.left;
             const h = bbox.height - bbox.top;
             gl.canvas.width = w;
             gl.canvas.height = h;
-            updateTexture(frameSource!);
 
-            drawQuad(vaoObj,dewarpBindings, (gl) => {
+            downsampleContext!.drawImage(frameSource!, 0,0, downsampleBuffer.width, downsampleBuffer.height);
+           // downsampleContext!.fillStyle = "#FF0000";
+
+           // downsampleContext!.fillRect(0,0,256,256);
+
+            updateTexture(downsampleBuffer, downsampleBuffer.width, downsampleBuffer.height);
+
+            drawQuad(vaoObj, dewarpBindings, (gl) => {
                 gl.useProgram(dewarpProgram);
 
-                gl.uniform3fv(dewarpBindings.uniform!.rotateData.address,
-                    new Float32Array([Math.cos(ang)*0.5, -Math.sin(ang+=0.001)*.5, 0]));
+                if(dewarpBindings.uniform!.rotateData) {
+                    ang+=0.01; //3.14159256/180.0;
+                    gl.uniform3fv(dewarpBindings.uniform!.rotateData.address,
+                        new Float32Array([ang % (2.0 * Math.PI),
+                            1.5, 1.5+Math.sin(-ang)]));
+                    console.log(ang);
+                    //    new Float32Array([Math.cos(ang), -Math.sin(ang += 0.001), Math.cos(-ang)]));
+                }
 
-                gl.uniform1i(dewarpBindings.uniform!.u_texture.address, 0);
-            }, frameTexture, dewarpFBO.fbo, gl.TEXTURE0);
-            drawQuad(vaoObj2,b2,(gl) => {
-                gl.useProgram(p2);
-                gl.uniform1i(b2.uniform!.u_texture.address, 1);
+                gl.uniform1f(dewarpBindings.uniform!.tangentOfFieldOfView.address, Math.sin(ang));
+                gl.uniform1i(dewarpBindings.uniform!.width.address, gl.canvas.clientWidth/5.0);
+                gl.uniform1i(dewarpBindings.uniform!.height.address, gl.canvas.clientHeight/5.0);
+                if(dewarpBindings.uniform!.u_texture) {
+                    gl.uniform1i(dewarpBindings.uniform!.u_texture.address, 0);
+                }
+            }, frameTexture, dewarpFBO, gl.TEXTURE0);
+            drawQuad(vaoObj2, postProcessBindings, (gl) => {
+                gl.useProgram(postProcessProgram);
+
+                if (postProcessBindings.uniform!.u_texture) {
+                    gl.uniform1i(postProcessBindings.uniform!.u_texture.address, 1);
+                }
             }, dewarpFBO.texObject, null, gl.TEXTURE1);
 
             requestAnimationFrame(updateRender);
@@ -163,10 +192,11 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
     }
 
     return {
-        submitFrame: (frame: HTMLVideoElement) => {
+        startDewarp: (frame: HTMLVideoElement) => {
             //if(frameSource !== frame) {
-                frameSource = frame;
-                updateRender();
+            console.log('Starting dewarp');
+            frameSource = frame;
+            updateRender();
             //}
         },
         stopRender: () => {
@@ -187,9 +217,9 @@ export const DewarpComponent: React.FC<React.PropsWithChildren<any>> =
         const canvasRef = useRef<HTMLCanvasElement>(null);
 
         useImperativeHandle(ref, () => ({
-            processFrame: (video: HTMLVideoElement) => {
+            startDewarp: (video: HTMLVideoElement) => {
                 if (glPipe) {
-                    glPipe.submitFrame(video);
+                    glPipe.startDewarp(video);
                 } else {
                     console.error('glpipeline is not ready yet!');
                 }
@@ -201,28 +231,28 @@ export const DewarpComponent: React.FC<React.PropsWithChildren<any>> =
                 console.info('Setting up rendering pipeline');
                 const canvas = canvasRef.current;
                 const container = containerRef.current;
-/*
-                container.onwheel = (ev) => {
-                    ev.preventDefault();
-                }
+                /*
+                                container.onwheel = (ev) => {
+                                    ev.preventDefault();
+                                }
 
-                let sampleMouse = false;
-                container.onmousedown = (ev) => {
-                    ev.preventDefault();
-                    sampleMouse = true;
-                }
+                                let sampleMouse = false;
+                                container.onmousedown = (ev) => {
+                                    ev.preventDefault();
+                                    sampleMouse = true;
+                                }
 
-                container.onmouseup = (ev) => {
-                    ev.preventDefault();
-                    sampleMouse = false;
-                }
+                                container.onmouseup = (ev) => {
+                                    ev.preventDefault();
+                                    sampleMouse = false;
+                                }
 
-                container.onmousemove = (ev) => {
-                    ev.preventDefault();
-                    if(sampleMouse) {
-                        //console.log('Move', ev.movementX, ev.movementY);
-                    }
-                }*/
+                                container.onmousemove = (ev) => {
+                                    ev.preventDefault();
+                                    if(sampleMouse) {
+                                        //console.log('Move', ev.movementX, ev.movementY);
+                                    }
+                                }*/
 
                 const glContext = canvas.getContext("webgl2");
 
@@ -237,7 +267,7 @@ export const DewarpComponent: React.FC<React.PropsWithChildren<any>> =
 
                 return () => {
                     console.info('Shutting down pipeline');
-                    if(glPipeline) {
+                    if (glPipeline) {
                         glPipeline.shutdown();
                     }
                 }
