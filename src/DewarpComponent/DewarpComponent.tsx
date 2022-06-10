@@ -1,7 +1,35 @@
 import React, {useEffect, useImperativeHandle, useRef, useState} from "react";
 import {FCAGLBindingMap, shaderCompiler} from "./FCAShaderCompiler";
 import {mat4} from 'gl-matrix';
+import {dewarpFragmentShader, dewarpVertexShader} from "./DewarpShader";
 type FCAGLPipeline = { submitFrame: (video: HTMLVideoElement) => void, stopRender: () => void};
+
+const vsSource = `#version 300 es
+    in vec4 a_position;
+    in vec2 a_texcoord;
+    
+    uniform mat4 u_matrix;
+    
+    out vec2 v_texcoord;
+    
+    void main() {
+      gl_Position = u_matrix * a_position;
+      v_texcoord = a_texcoord;
+    }
+`;
+
+const fsSource = `#version 300 es
+    precision highp float;
+     
+    in vec2 v_texcoord;
+    uniform sampler2D u_texture;
+    out vec4 color;
+     
+    void main() {
+       color = vec4(texture(u_texture, v_texcoord));
+    }
+`;
+
 
 const createVAO = (gl: WebGL2RenderingContext, bindings: FCAGLBindingMap) => {
     const vao = gl.createVertexArray();
@@ -12,8 +40,10 @@ const createVAO = (gl: WebGL2RenderingContext, bindings: FCAGLBindingMap) => {
 
     gl.enableVertexAttribArray(bindings.in!.a_position.address!);
     gl.vertexAttribPointer(bindings.in!.a_position.address!, 2, gl.FLOAT, false, 0, 0);
-    gl.enableVertexAttribArray(bindings!.in!.a_texcoord.address!);
-    gl.vertexAttribPointer(bindings!.in!.a_texcoord.address!, 2, gl.FLOAT, true, 0, 0);
+    if(bindings!.in!.a_texcoord) {
+        gl.enableVertexAttribArray(bindings!.in!.a_texcoord.address!);
+        gl.vertexAttribPointer(bindings!.in!.a_texcoord.address!, 2, gl.FLOAT, true, 0, 0);
+    }
     return {vao: vao, verticies: quad.length / 2};
 }
 
@@ -26,47 +56,74 @@ const createProjectionMatrix = (w: number, h: number, x?: number, y?: number) =>
 }
 
 
+type FCAGLTextureObject = {
+    tex: WebGLTexture | null;
+    width: number;
+    height: number;
+}
+
 const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivElement):{ stopRender: () => void; submitFrame: (frame: HTMLVideoElement) => void; shutdown: () => void } => {
     const compiler = shaderCompiler(gl);
-    const {program, bindings} = compiler.compileProgram();
+    const {program: p1, bindings: b1} = compiler.compileProgram({ vertexShader: dewarpVertexShader, fragmentShader: dewarpFragmentShader});
+    const {program: p2, bindings: b2} = compiler.compileProgram({ vertexShader: vsSource, fragmentShader: fsSource});
 
-    const vaoObj = createVAO(gl, bindings);
+    const vaoObj = createVAO(gl, b1);
+    const vaoObj2 = createVAO(gl, b2);
 
-    const drawQuad = (tex: WebGLTexture) => {
+    const drawQuad = (vao: any, bindings: FCAGLBindingMap, programSetup: (gl: WebGL2RenderingContext) => void, tex: FCAGLTextureObject , fbo: WebGLFramebuffer | null, textureUnit: GLenum) => {
         const bbox = container.getBoundingClientRect();
         const w = bbox.width - bbox.left;
         const h = bbox.height - bbox.top;
-        gl.canvas.width = w;
-        gl.canvas.height = h;
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
 
         gl.viewport(0, 0, w, h);
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-        gl.useProgram(program);
+        programSetup(gl);
 
-        gl.bindVertexArray(vaoObj.vao);
+        gl.bindVertexArray(vao.vao);
 
-        gl.uniform1i(bindings.uniform!.u_texture.address, 0);
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.activeTexture( textureUnit);
+        gl.bindTexture(gl.TEXTURE_2D, tex.tex);
 
-        const matrix = createProjectionMatrix(w, h);
-        gl.uniformMatrix4fv(bindings.uniform!.u_matrix.address, false, matrix);
+        if(bindings.uniform!.u_matrix) {
+            const matrix = createProjectionMatrix(w, h);
+            gl.uniformMatrix4fv(bindings.uniform!.u_matrix.address, false, matrix);
+        }
 
-        gl.drawArrays(gl.TRIANGLES, 0, vaoObj.verticies);
+        gl.drawArrays(gl.TRIANGLES, 0, vao.verticies);
     }
 
-    const frameTexture = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, frameTexture);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    const createTexture = () => {
+        const w = 1920;
+        const h = 1080;
+        const tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        return { tex: tex, width: w, height: h };
+    }
+
+    const createFBO = () => {
+        const textureObject = createTexture();
+        const fb = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, textureObject.tex, 0)
+        return { fbo: fb, texObject: textureObject };
+    };
+
+    const frameTexture = createTexture();
+    const dewarpFBO = createFBO() ;
 
     const updateTexture = (v: HTMLVideoElement) => {
-        gl.bindTexture(gl.TEXTURE_2D, frameTexture);
+        gl.bindTexture(gl.TEXTURE_2D, frameTexture.tex);
+        frameTexture.width = v.videoWidth;
+        frameTexture.height = v.videoHeight;
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, v.videoWidth, v.videoHeight, 0, gl.RGBA, gl.UNSIGNED_BYTE, v);
     }
 
@@ -74,8 +131,22 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
 
     const updateRender = () => {
         if(frameSource) {
+            const bbox = container.getBoundingClientRect();
+            const w = bbox.width - bbox.left;
+            const h = bbox.height - bbox.top;
+            gl.canvas.width = w;
+            gl.canvas.height = h;
             updateTexture(frameSource!);
-            drawQuad(frameTexture!);
+
+            drawQuad(vaoObj,b1, (gl) => {
+                gl.useProgram(p1);
+                gl.uniform1i(b1.uniform!.u_texture.address, 0);
+            }, frameTexture, dewarpFBO.fbo, gl.TEXTURE0);
+            drawQuad(vaoObj2,b2,(gl) => {
+                gl.useProgram(p2);
+                gl.uniform1i(b2.uniform!.u_texture.address, 1);
+            }, dewarpFBO.texObject, null, gl.TEXTURE1);
+
             requestAnimationFrame(updateRender);
         } else {
             console.log('No frameSource');
@@ -94,7 +165,7 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
         },
         shutdown: () => {
             frameSource = null;
-            gl.deleteTexture(frameTexture!);
+            gl.deleteTexture(frameTexture.tex!);
         }
     }
 }
@@ -124,7 +195,6 @@ export const DewarpComponent: React.FC<React.PropsWithChildren<any>> =
 
                 container.onwheel = (ev) => {
                     ev.preventDefault();
-                    // Scroll in/out;
                 }
 
                 let sampleMouse = false;

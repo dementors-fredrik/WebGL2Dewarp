@@ -14,8 +14,8 @@ const VideoComponent : React.FC<{onFrame: any}>= ({onFrame}) => {
         }
     }, [onFrame, videoEl]);
 
-    return (<video ref={videoEl} loop autoPlay={true} muted={true} src={videoSrc} width={'100%'}
-                   height={'100%'}></video>);
+    return (<video controls={true} ref={videoEl} loop autoPlay={true} muted={true} src={videoSrc} width={'50%'}
+                   height={'50%'}></video>);
 }
 
 function App() {
