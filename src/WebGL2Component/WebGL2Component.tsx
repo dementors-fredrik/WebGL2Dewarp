@@ -1,7 +1,6 @@
-import React, {useEffect, useRef} from "react";
+import React, {useEffect, useImperativeHandle, useRef, useState} from "react";
 import {FCAGLBindingMap, shaderCompiler} from "./FCAShaderCompiler";
 import {mat4} from 'gl-matrix';
-import arrow from '../Unknown.png';
 
 async function loadImage(gl: WebGL2RenderingContext, url: string): Promise<any> {
     return new Promise((resolve, reject) => {
@@ -14,7 +13,7 @@ async function loadImage(gl: WebGL2RenderingContext, url: string): Promise<any> 
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
             gl.bindTexture(gl.TEXTURE_2D, tex);
             gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
-            gl.generateMipmap(gl.TEXTURE_2D);
+           // gl.generateMipmap(gl.TEXTURE_2D);
             resolve({
                 width: img.width,
                 height: img.height,
@@ -24,6 +23,7 @@ async function loadImage(gl: WebGL2RenderingContext, url: string): Promise<any> 
         img.src = url;
     })
 }
+
 const createVAO = (gl: WebGL2RenderingContext, bindings: FCAGLBindingMap) => {
     const vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
@@ -35,10 +35,10 @@ const createVAO = (gl: WebGL2RenderingContext, bindings: FCAGLBindingMap) => {
     gl.vertexAttribPointer(bindings.in!.a_position.address!, 2, gl.FLOAT, false, 0, 0);
     gl.enableVertexAttribArray(bindings!.in!.a_texcoord.address!);
     gl.vertexAttribPointer(bindings!.in!.a_texcoord.address!, 2, gl.FLOAT, true, 0, 0);
-    return { vao: vao, verticies: quad.length/2 };
+    return {vao: vao, verticies: quad.length / 2};
 }
 
-const createProjectionMatrix = (w: number, h: number, x?: number, y?:number) => {
+const createProjectionMatrix = (w: number, h: number, x?: number, y?: number) => {
     let m = mat4.create();
     mat4.ortho(m, 0, w, h, 0, -1, 1);
     mat4.translate(m, m, [x || 0, y || 0, 0]);
@@ -46,13 +46,13 @@ const createProjectionMatrix = (w: number, h: number, x?: number, y?:number) => 
     return m;
 }
 
-const boostrapWebGL2 = (gl: WebGL2RenderingContext, container: HTMLDivElement) => {
+type FCAGLPipeline = { submitFrame: (video: HTMLVideoElement) => void, stopRender: () => void};
+
+const setupWebGLRenderPipeline = (gl: WebGL2RenderingContext, container: HTMLDivElement):FCAGLPipeline => {
     const compiler = shaderCompiler(gl);
     const {program, bindings} = compiler.compileProgram();
 
     const vaoObj = createVAO(gl, bindings);
-
-    let ang = 0;
 
     const drawQuad = (tex: WebGLTexture) => {
         const bbox = container.getBoundingClientRect();
@@ -73,45 +73,92 @@ const boostrapWebGL2 = (gl: WebGL2RenderingContext, container: HTMLDivElement) =
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, tex);
 
-        const matrix = createProjectionMatrix(w,h, w/2, h/2);
-
-        mat4.rotate(matrix,matrix,(3.14159/180)*(ang++),[0,0,1]);
-
+        const matrix = createProjectionMatrix(w, h);
         gl.uniformMatrix4fv(bindings.uniform!.u_matrix.address, false, matrix);
 
         gl.drawArrays(gl.TRIANGLES, 0, vaoObj.verticies);
     }
 
-    loadImage(gl, arrow).then((tex) => {
-        const draw = () => {
-            drawQuad(tex.texture!);
-            requestAnimationFrame(draw);
+    const frameTexture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, frameTexture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+    const updateTexture = (v: HTMLVideoElement) => {
+        gl.bindTexture(gl.TEXTURE_2D, frameTexture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, v);
+    }
+
+    let frameSource : HTMLVideoElement | null = null;
+
+    const updateRender = () => {
+        if(frameSource) {
+            updateTexture(frameSource!);
+            drawQuad(frameTexture!);
+            requestAnimationFrame(updateRender);
         }
-        requestAnimationFrame(draw);
-    });
-}
+    }
 
-export const WebGL2Component: React.FC<React.PropsWithChildren<any>> = ({children}) => {
-    const containerRef = useRef<HTMLDivElement>(null);
-    const canvasRef = useRef<HTMLCanvasElement>(null);
-
-    useEffect(() => {
-        if (canvasRef.current && containerRef.current) {
-            const canvas = canvasRef.current;
-            const container = containerRef.current;
-
-            const glContext = canvas.getContext("webgl2");
-
-            if (!glContext) {
-                console.error('No gl for you');
-                return;
+    return {
+        submitFrame: (frame: HTMLVideoElement) => {
+            if(frameSource !== frame) {
+                frameSource = frame;
+                updateRender();
             }
-            boostrapWebGL2(glContext, container);
+        },
+        stopRender: () => {
+            frameSource = null;
         }
-    }, [canvasRef, containerRef]);
-
-    return (<div ref={containerRef} style={{width: "100%", height: "100%", overflow: 'hidden'}}>
-        <canvas ref={canvasRef}></canvas>
-        {children}
-    </div>)
+    }
 }
+
+export const WebGL2Component: React.FC<React.PropsWithChildren<any>> =
+    React.forwardRef(({children}, ref) => {
+        const [glPipe, setGlPipeline] = useState<FCAGLPipeline | null>(null);
+
+        const containerRef = useRef<HTMLDivElement>(null);
+        const canvasRef = useRef<HTMLCanvasElement>(null);
+
+        useImperativeHandle(ref, () => ({
+            processFrame: (video: HTMLVideoElement) => {
+                if (glPipe) {
+                    glPipe.submitFrame(video);
+                } else {
+                    console.error('glpipeline is not ready yet!');
+                }
+            }
+        }), [glPipe]);
+
+        useEffect(() => {
+            if (canvasRef.current && containerRef.current) {
+                const canvas = canvasRef.current;
+                const container = containerRef.current;
+
+                const glContext = canvas.getContext("webgl2");
+
+                if (!glContext) {
+                    console.error('No gl for you');
+                    return;
+                }
+                const glPipeline = setupWebGLRenderPipeline(glContext, container);
+                setGlPipeline(glPipeline);
+
+                return () => {
+                    console.error('Shutting down renderer');
+                    if(glPipeline) {
+                        glPipeline.stopRender();
+                    }
+                }
+            }
+
+        }, [canvasRef, containerRef]);
+
+        return (<div ref={containerRef} style={{width: "100%", height: "100%", overflow: 'hidden'}}>
+            <div style={{position: 'relative'}}>
+                <canvas ref={canvasRef} style={{left: '0px', top: '0px', position: 'absolute'}}></canvas>
+                <div style={{left: '0px', top: '0px'}}>
+                    {children}
+                </div>
+            </div>
+        </div>)
+    })
