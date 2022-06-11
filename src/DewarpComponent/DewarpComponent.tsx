@@ -4,10 +4,31 @@ import {mat4} from 'gl-matrix';
 import {dewarpFragmentShader, dewarpVertexShader} from "./DewarpShader";
 
 type FCAGLPipeline = { startDewarp: (video: HTMLVideoElement) => void, stopRender: () => void };
-const DOWNSCALE_FACTOR = 2;
-const BUFFER_SIZE = 1024/DOWNSCALE_FACTOR;
 
-const postProcessFragmentShader = `#version 300 es
+type FCAGLTextureObject = {
+    tex: WebGLTexture | null;
+    width: number;
+    height: number;
+}
+
+export type FCADewarpHandle =
+    { stopRender: () => void; startDewarp: (frame: HTMLVideoElement) => void; shutdown: () => void }
+
+const TUNING_CONSTANTS = {
+  workaroundSlowTexSubImage: true
+};
+
+let DOWNSCALE_FACTOR = 2.0;
+const BUFFER_SIZE = 3072/DOWNSCALE_FACTOR;
+
+// XXX: TBI
+enum MOUNT_POSITION {
+    CEILING,
+    DESK,
+    WALL
+}
+
+const amdFidelityCASVShader = `#version 300 es
     in vec4 a_position;
     in vec2 a_texcoord;
     
@@ -21,26 +42,73 @@ const postProcessFragmentShader = `#version 300 es
     }
 `;
 
-const postProcessVertexShader = `#version 300 es
+const amdFidelityCASFShader = `#version 300 es
     precision highp float;
      
     in vec2 v_texcoord;
     uniform sampler2D u_texture;
+    uniform float divider;
     out vec4 color;
      
     void main() {
-       color = vec4(texture(u_texture, v_texcoord).rgb,1);
+    ivec2 itexres = textureSize(u_texture, 0);
+
+    vec2 uv = v_texcoord;
+    vec2 muv;
+    muv = vec2(divider,0.7);
+    
+    vec3 col = texture(u_texture, uv).xyz;
+
+    float max_g = col.y;
+    float min_g = col.y;
+    vec4 uvoff = vec4(1,0,1,-1)/vec2(itexres).xxyy;
+    vec3 colw;
+    vec3 col1 = texture(u_texture, uv+uvoff.yw).xyz;
+    max_g = max(max_g, col1.y);
+    min_g = min(min_g, col1.y);
+    colw = col1;
+    col1 = texture(u_texture, uv+uvoff.xy).xyz;
+    max_g = max(max_g, col1.y);
+    min_g = min(min_g, col1.y);
+    colw += col1;
+    col1 = texture(u_texture, uv+uvoff.yz).xyz;
+    max_g = max(max_g, col1.y);
+    min_g = min(min_g, col1.y);
+    colw += col1;
+    col1 = texture(u_texture, uv-uvoff.xy).xyz;
+    max_g = max(max_g, col1.y);
+    min_g = min(min_g, col1.y);
+    colw += col1;
+    float d_min_g = min_g;
+    float d_max_g = 1.-max_g;
+    float A;
+    if (d_max_g < d_min_g) {
+        A = d_max_g / max_g;
+    } else {
+        A = d_min_g / max_g;
     }
+    A = sqrt(A);
+    A *= mix(-.125, -.2, muv.y);
+    vec3 col_out = (col + colw * A) / (1.+4.*A);
+    if (uv.x > (muv.x-.002)) {
+        if (uv.x > (muv.x+.002)) {
+            col_out = col;
+        } else {
+            col_out = vec3(0);
+        }
+    }
+    color = vec4(col_out,1);
+}
 `;
 
-let ang = 0;
+let rotationAngle = 0.7;
 
 const createVAO = (gl: WebGL2RenderingContext, bindings: FCAGLBindingMap) => {
     const vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
-    const quad = [0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 1];
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(quad), gl.STATIC_DRAW);
+    const screenQuad = [0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 1];
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(screenQuad), gl.STATIC_DRAW);
 
     gl.enableVertexAttribArray(bindings.in!.a_position.address!);
     gl.vertexAttribPointer(bindings.in!.a_position.address!, 2, gl.FLOAT, false, 0, 0);
@@ -48,7 +116,7 @@ const createVAO = (gl: WebGL2RenderingContext, bindings: FCAGLBindingMap) => {
         gl.enableVertexAttribArray(bindings!.in!.a_texcoord.address!);
         gl.vertexAttribPointer(bindings!.in!.a_texcoord.address!, 2, gl.FLOAT, true, 0, 0);
     }
-    return {vao: vao, verticies: quad.length / 2};
+    return {vao: vao, verticies: screenQuad.length / 2};
 }
 
 const createProjectionMatrix = (w: number, h: number, x?: number, y?: number) => {
@@ -58,27 +126,18 @@ const createProjectionMatrix = (w: number, h: number, x?: number, y?: number) =>
     return m;
 }
 
-
-type FCAGLTextureObject = {
-    tex: WebGLTexture | null;
-    width: number;
-    height: number;
-}
-
-export type FCADewarpHandle =
-    { stopRender: () => void; startDewarp: (frame: HTMLVideoElement) => void; shutdown: () => void }
-
-
-const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivElement): FCADewarpHandle => {
+const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivElement, opticProfile: Float32Array): FCADewarpHandle => {
     const compiler = shaderCompiler(gl);
     const {
         program: dewarpProgram,
         bindings: dewarpBindings
     } = compiler.compileProgram({vertexShader: dewarpVertexShader, fragmentShader: dewarpFragmentShader});
-    const {program: postProcessProgram, bindings: postProcessBindings} = compiler.compileProgram({vertexShader: postProcessFragmentShader, fragmentShader: postProcessVertexShader});
+    const {program: postProcessProgram, bindings: fidelityCASBindings} = compiler.compileProgram({vertexShader: amdFidelityCASVShader, fragmentShader: amdFidelityCASFShader});
 
     const vaoObj = createVAO(gl, dewarpBindings);
-    const vaoObj2 = createVAO(gl, postProcessBindings);
+    const vaoObj2 = createVAO(gl, fidelityCASBindings);
+
+    let frameCounter = 0;
 
     const drawQuad = (vao: any, bindings: FCAGLBindingMap, programSetup: (gl: WebGL2RenderingContext) => void, tex: FCAGLTextureObject, fbo: FAGLFBOObject | null, textureUnit: GLenum) => {
         gl.bindFramebuffer(gl.FRAMEBUFFER, fbo ? fbo.fbo : null);
@@ -98,8 +157,8 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
         gl.bindTexture(gl.TEXTURE_2D, tex.tex);
 
         if (bindings.uniform!.u_matrix) {
-            const matrix = createProjectionMatrix(downsampleBuffer.width, downsampleBuffer.height, 0, 0);
-            mat4.scale(matrix, matrix, [downsampleBuffer.width, downsampleBuffer.height, 1]);
+            const matrix = createProjectionMatrix(downsampleCtx.width, downsampleCtx.height, 0, 0);
+            mat4.scale(matrix, matrix, [downsampleCtx.width, downsampleCtx.height, 1]);
 
             gl.uniformMatrix4fv(bindings.uniform!.u_matrix.address, false, matrix);
         }
@@ -112,8 +171,8 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
         gl.bindTexture(gl.TEXTURE_2D, tex);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
         return {tex: tex, width: w, height: h};
     }
@@ -128,64 +187,70 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
         return {fbo: fb!, texObject: textureObject};
     };
 
-    const downsampleBuffer = document.createElement('canvas');
-    const downsampleContext = downsampleBuffer.getContext("2d");
-    downsampleBuffer.width = BUFFER_SIZE;
-    downsampleBuffer.height = BUFFER_SIZE;
+    const downsampleCtx = document.createElement('canvas');
+    const downsample = downsampleCtx.getContext("2d");
+    downsample!.imageSmoothingEnabled = true;
+    downsampleCtx.width = BUFFER_SIZE;
+    downsampleCtx.height = BUFFER_SIZE;
 
-    const frameTexture = createTexture(downsampleBuffer.width, downsampleBuffer.height);
-    const dewarpFBO = createFBO(downsampleBuffer.width, downsampleBuffer.height);
+    const frameTexture = createTexture(downsampleCtx.width, downsampleCtx.height);
+    const dewarpFBO = createFBO(downsampleCtx.width, downsampleCtx.height);
 
-    const updateTexture = (v: HTMLVideoElement | HTMLCanvasElement, w: number, h: number) => {
+    const sampleVideoFrame = (v: HTMLVideoElement | HTMLCanvasElement) => {
+        let offsetX = 0;
+        let offsetY = 0;
+
         gl.bindTexture(gl.TEXTURE_2D, frameTexture.tex);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, v);
+
+        if(TUNING_CONSTANTS.workaroundSlowTexSubImage) {
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, v.width, v.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, v);
+        } else {
+            gl.texSubImage2D(gl.TEXTURE_2D, 0, offsetX, offsetY,
+                frameTexture.width-offsetX, frameTexture.height-offsetY, gl.RGBA, gl.UNSIGNED_BYTE, v);
+        }
     }
 
     let frameSource: HTMLVideoElement | null = null;
+    const updateFramebufferSize = () => {
+        const bbox = container.getBoundingClientRect();
+        const w = bbox.width - bbox.left;
+        const h = bbox.height - bbox.top;
+        gl.canvas.width = w;
+        gl.canvas.height = h;
+    }
 
     const updateRender = () => {
+        rotationAngle+=(Math.PI/180.0);
         if (frameSource) {
-            const bbox = container.getBoundingClientRect();
-            const w = bbox.width - bbox.left;
-            const h = bbox.height - bbox.top;
-            gl.canvas.width = w;
-            gl.canvas.height = h;
-
-            downsampleContext!.drawImage(frameSource!, 0,0, downsampleBuffer.width, downsampleBuffer.height);
-           // downsampleContext!.fillStyle = "#FF0000";
-
-           // downsampleContext!.fillRect(0,0,256,256);
-
-            updateTexture(downsampleBuffer, downsampleBuffer.width, downsampleBuffer.height);
+            updateFramebufferSize();
 
             drawQuad(vaoObj, dewarpBindings, (gl) => {
                 gl.useProgram(dewarpProgram);
 
-                if(dewarpBindings.uniform!.rotateData) {
-                    ang+=0.01; //3.14159256/180.0;
-                    gl.uniform3fv(dewarpBindings.uniform!.rotateData.address,
-                        new Float32Array([ang % (2.0 * Math.PI),
-                            1.5, 1.5+Math.sin(-ang)]));
-                    console.log(ang);
-                    //    new Float32Array([Math.cos(ang), -Math.sin(ang += 0.001), Math.cos(-ang)]));
-                }
+                gl.uniform3fv(dewarpBindings.uniform!.rotateData.address,
+                  [0.0,(Math.PI/180.0)*55,
+                      -(Math.PI/180.0)*120]);
 
-                gl.uniform1f(dewarpBindings.uniform!.tangentOfFieldOfView.address, Math.sin(ang));
-                gl.uniform1i(dewarpBindings.uniform!.width.address, gl.canvas.clientWidth/5.0);
-                gl.uniform1i(dewarpBindings.uniform!.height.address, gl.canvas.clientHeight/5.0);
-                if(dewarpBindings.uniform!.u_texture) {
-                    gl.uniform1i(dewarpBindings.uniform!.u_texture.address, 0);
-                }
+                gl.uniform1f(dewarpBindings.uniform!.tangentOfFieldOfView.address, Math.tan((Math.PI/180.0)*30.0));
+                gl.uniform4fv(dewarpBindings.uniform!.LensProfile.address, opticProfile );
+                gl.uniform2fv(dewarpBindings.uniform!.video_size.address,[frameSource!.videoWidth,frameSource!.videoHeight]);
+                gl.uniform1i(dewarpBindings.uniform!.u_texture.address, 0);
+
             }, frameTexture, dewarpFBO, gl.TEXTURE0);
-            drawQuad(vaoObj2, postProcessBindings, (gl) => {
-                gl.useProgram(postProcessProgram);
-
-                if (postProcessBindings.uniform!.u_texture) {
-                    gl.uniform1i(postProcessBindings.uniform!.u_texture.address, 1);
-                }
-            }, dewarpFBO.texObject, null, gl.TEXTURE1);
 
             requestAnimationFrame(updateRender);
+
+            if((frameCounter++ & 0x3) === 0) {
+                downsample!.drawImage(frameSource!, 0,0, downsampleCtx.width, downsampleCtx.height);
+                sampleVideoFrame(downsampleCtx);
+            }
+
+            drawQuad(vaoObj2, fidelityCASBindings, (gl) => {
+                gl.useProgram(postProcessProgram);
+                gl.uniform1i(fidelityCASBindings.uniform!.u_texture.address, 1);
+                gl.uniform1f(fidelityCASBindings.uniform!.divider.address, .5+Math.sin((Math.PI/180.0)*frameCounter)*0.5);
+            }, dewarpFBO.texObject, null, gl.TEXTURE1);
+
         } else {
             console.log('No frameSource');
         }
@@ -193,16 +258,18 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
 
     return {
         startDewarp: (frame: HTMLVideoElement) => {
-            //if(frameSource !== frame) {
-            console.log('Starting dewarp');
-            frameSource = frame;
-            updateRender();
-            //}
+            if(frameSource == null) {
+                console.log('Starting dewarp');
+                frameSource = frame;
+                updateRender();
+            }
         },
         stopRender: () => {
+            console.log('Stopping dewarp');
             frameSource = null;
         },
         shutdown: () => {
+            console.log('Terminating gl context');
             frameSource = null;
             gl.deleteTexture(frameTexture.tex!);
         }
@@ -210,11 +277,21 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
 }
 
 export const DewarpComponent: React.FC<React.PropsWithChildren<any>> =
-    React.forwardRef(({children}, ref) => {
+    React.forwardRef(({children, lensProfile}, ref) => {
         const [glPipe, setGlPipeline] = useState<FCAGLPipeline | null>(null);
+        const [opticProfile, setOpticProfile] = useState<Float32Array>(new Float32Array([0,0,0,0]));
 
         const containerRef = useRef<HTMLDivElement>(null);
         const canvasRef = useRef<HTMLCanvasElement>(null);
+
+        useEffect(() => {
+            if(lensProfile) {
+                while(lensProfile.length<4) {
+                    lensProfile.unshift(0);
+                }
+                setOpticProfile(new Float32Array(lensProfile));
+            }
+        },[lensProfile]);
 
         useImperativeHandle(ref, () => ({
             startDewarp: (video: HTMLVideoElement) => {
@@ -231,28 +308,28 @@ export const DewarpComponent: React.FC<React.PropsWithChildren<any>> =
                 console.info('Setting up rendering pipeline');
                 const canvas = canvasRef.current;
                 const container = containerRef.current;
-                /*
-                                container.onwheel = (ev) => {
-                                    ev.preventDefault();
-                                }
 
-                                let sampleMouse = false;
-                                container.onmousedown = (ev) => {
-                                    ev.preventDefault();
-                                    sampleMouse = true;
-                                }
+                container.onwheel = (ev) => {
+                    ev.preventDefault();
+                }
 
-                                container.onmouseup = (ev) => {
-                                    ev.preventDefault();
-                                    sampleMouse = false;
-                                }
+                let sampleMouse = false;
+                container.onmousedown = (ev) => {
+                    ev.preventDefault();
+                    sampleMouse = true;
+                }
 
-                                container.onmousemove = (ev) => {
-                                    ev.preventDefault();
-                                    if(sampleMouse) {
-                                        //console.log('Move', ev.movementX, ev.movementY);
-                                    }
-                                }*/
+                container.onmouseup = (ev) => {
+                    ev.preventDefault();
+                    sampleMouse = false;
+                }
+
+                container.onmousemove = (ev) => {
+                    ev.preventDefault();
+                    if(sampleMouse) {
+                        //console.log('Move', ev.movementX, ev.movementY);
+                    }
+                }
 
                 const glContext = canvas.getContext("webgl2");
 
@@ -261,7 +338,7 @@ export const DewarpComponent: React.FC<React.PropsWithChildren<any>> =
                     return;
                 }
 
-                const glPipeline = configureWebGL2Pipeline(glContext, container);
+                const glPipeline = configureWebGL2Pipeline(glContext, container, opticProfile);
 
                 setGlPipeline(glPipeline);
 
@@ -273,7 +350,7 @@ export const DewarpComponent: React.FC<React.PropsWithChildren<any>> =
                 }
             }
 
-        }, [canvasRef, containerRef]);
+        }, [canvasRef, containerRef, opticProfile]);
 
         return (<div ref={containerRef} style={{width: "100%", height: "100%", overflow: 'hidden'}}>
             <div style={{position: 'relative'}}>

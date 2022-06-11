@@ -21,7 +21,7 @@ const VideoComponent: React.FC<{ onPlaybackStarted: any }> = ({onPlaybackStarted
 function App() {
     const glueCallback = useRef<FCADewarpHandle>(null);
 
-    const lensProfile = {x: 113.889694, y: -60.882477, z: 751.488831};
+    const lensProfile = [113.889694,-60.882477,751.488831];
     const ptzSetting = {x: 4.109286700809463, y: -0.9885839816668688, fov: 0.8351400470792861};
 
     const processFrame = useCallback((v: HTMLVideoElement) => {
@@ -36,7 +36,7 @@ function App() {
 
     return (
         <div style={{width: '100%', height: '100%'}}>
-            <DewarpComponent ref={glueCallback}>
+            <DewarpComponent ref={glueCallback} lensProfile={lensProfile}>
                     <VideoComponent onPlaybackStarted={processFrame}/>
             </DewarpComponent>)
         </div>

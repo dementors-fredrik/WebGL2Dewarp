@@ -3,20 +3,19 @@ precision highp float;
 const float PI = 3.1415926535897932384626433832795;
 
 uniform sampler2D u_texture;
-in vec2 size;                 /// native resolution, x is width, y is height
+uniform vec2 video_size;                       /// native resolution, x is width, y is height
 uniform float tangentOfFieldOfView; /// The desired field of view (zoom level)
-float lambdaOffset = PI/2.0;         /// Offset for the lambda value
+float lambdaOffset = PI/2.0;        /// Offset for the lambda value
 uniform vec3 rotateData;            /// Data used for rotating the image depending on pan, tilt and placement
-//uniform vec4 LensProfile;           /// The profile for the current lens
+uniform vec4 LensProfile;           /// The profile for the current lens
 
-vec4 LensProfile = vec4(113.889694, -60.882477, 751.488831, 0.0);
 in vec2 uv;
 
 out vec4 fragColor;
 
 float CalcTheta(vec2 sep)
 {
-  return atan(length(sep) / (size.y * 0.5) * tangentOfFieldOfView);
+  return atan(length(sep) / (video_size.y * 0.5) * tangentOfFieldOfView);
 }
 
 float GetLensRadiusProfile(float theta)
@@ -24,7 +23,6 @@ float GetLensRadiusProfile(float theta)
   float t2 = theta * theta;
   float t3 = t2 * theta;
   float t4 = t3 * theta;
-
   return LensProfile.x * t4 + LensProfile.y * t3 + LensProfile.z * t2 + LensProfile.w * theta;
 }
 
@@ -81,8 +79,7 @@ vec2 CalcRotate(float theta, float lambda)
 
 void main(void)
 {
-
-  vec2 sep = (uv - 0.5) * size;
+  vec2 sep = (uv - 0.5) * video_size.x;
 
   // The theta and lambda of a ray passing from the eye through the near plane
   float theta = CalcTheta(sep);
@@ -91,15 +88,15 @@ void main(void)
   //Rotate
   vec2 rotated = CalcRotate(theta, lambda);
   theta = rotated.x;
-  lambda = rotated.y;
+  lambda = -rotated.y;
 
   float radiusProfile = GetLensRadiusProfile(theta);
 
-  float tabx = .5 + radiusProfile * cos(lambda) / size.x;
-  float taby = .5 + radiusProfile * sin(lambda) / size.y;
+  float tabx = .5 + (radiusProfile * cos(lambda)) / video_size.x;
+  float taby = .5 + (radiusProfile * sin(lambda)) / video_size.y;
 
-  if(tabx >= 1.0 || taby >= 1.0 || tabx < 0.0 || taby < 0.0) {
-    fragColor = vec4(1.0,1.0, 1.0, 1.0);
+  if(tabx >= 1.0 || taby >= 1.0 || tabx <= 0.0 || taby <= 0.0) {
+    fragColor = vec4(0,0,0, 1.0);
   } else {
     fragColor = vec4(texture(u_texture, vec2(tabx, taby) ).rgb, 1.0);
   }
@@ -114,12 +111,13 @@ uniform float height;
 uniform float width;
 
 out vec2 uv;
-out vec2 size;
+//out vec2 size;
 
 void main() {
-  size = vec2(textureSize(u_texture, 0)) * 10.;
+//  size = vec2(textureSize(u_texture, 0));
 
-  vec2 rscale = vec2(size.x / size.y, size.y / size.x);
+
+/*  vec2 rscale = vec2(size.x / size.y, size.y / size.x);
   vec2 aspectScale = vec2(0.0);
   float check = float(height * rscale.x < width);
 
@@ -129,12 +127,11 @@ void main() {
 
   vec2 scaled = a_position.xy * aspectScale;
 
-  scaled += (1.0 - aspectScale) / 2.0;
+  scaled += (1.0 - aspectScale) / 2.0;*/
 
   uv = a_texcoord;
 
-  //gl_Position = vec4(1.0 - 2.0 * vec2(1.0 - scaled.x, scaled.y), 0, 1);
   vec2 pos = a_position.xy;
-  gl_Position = u_matrix * vec4(pos,1,1);
+  gl_Position = u_matrix * a_position; 
 }
 `;
