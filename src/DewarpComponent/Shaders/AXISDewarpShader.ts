@@ -1,4 +1,4 @@
-export const dewarpFragmentShader = `#version 300 es
+export const AXISDewarpFragmentShaderWebGL2 = `#version 300 es
 precision highp float;
 const float PI = 3.1415926535897932384626433832795;
 
@@ -102,7 +102,7 @@ void main(void)
   }
 }`;
 
-export const dewarpVertexShader = `#version 300 es
+export const AXISDewarpVertexShaderWebGL2 = `#version 300 es
 in vec4 a_position;
 in vec2 a_texcoord;
 uniform mat4 u_matrix;

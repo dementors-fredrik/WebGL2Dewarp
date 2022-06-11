@@ -1,7 +1,8 @@
 import React, {useEffect, useImperativeHandle, useRef, useState} from "react";
 import {FCAGLBindingMap, shaderCompiler} from "./FCAShaderCompiler";
 import {mat4} from 'gl-matrix';
-import {dewarpFragmentShader, dewarpVertexShader} from "./DewarpShader";
+import {AXISDewarpFragmentShaderWebGL2, AXISDewarpVertexShaderWebGL2} from "./Shaders/AXISDewarpShader";
+import {AMDFidelityCASFShaderWebGL2, AMDFidelityCASVShaderWebGL2} from "./Shaders/AMDFidelityFXCASShader";
 
 type FCAGLPipeline = { startDewarp: (video: HTMLVideoElement) => void, stopRender: () => void };
 
@@ -15,91 +16,11 @@ export type FCADewarpHandle =
     { stopRender: () => void; startDewarp: (frame: HTMLVideoElement) => void; shutdown: () => void }
 
 const TUNING_CONSTANTS = {
-  workaroundSlowTexSubImage: true
+    workaroundSlowTexSubImage: true
 };
 
 let DOWNSCALE_FACTOR = 2.0;
-const BUFFER_SIZE = 3072/DOWNSCALE_FACTOR;
-
-// XXX: TBI
-enum MOUNT_POSITION {
-    CEILING,
-    DESK,
-    WALL
-}
-
-const amdFidelityCASVShader = `#version 300 es
-    in vec4 a_position;
-    in vec2 a_texcoord;
-    
-    uniform mat4 u_matrix;
-    
-    out vec2 v_texcoord;
-    
-    void main() {
-      v_texcoord = a_texcoord;
-      gl_Position = u_matrix * a_position;
-    }
-`;
-
-const amdFidelityCASFShader = `#version 300 es
-    precision highp float;
-     
-    in vec2 v_texcoord;
-    uniform sampler2D u_texture;
-    uniform float divider;
-    out vec4 color;
-     
-    void main() {
-    ivec2 itexres = textureSize(u_texture, 0);
-
-    vec2 uv = v_texcoord;
-    vec2 muv;
-    muv = vec2(divider,0.7);
-    
-    vec3 col = texture(u_texture, uv).xyz;
-
-    float max_g = col.y;
-    float min_g = col.y;
-    vec4 uvoff = vec4(1,0,1,-1)/vec2(itexres).xxyy;
-    vec3 colw;
-    vec3 col1 = texture(u_texture, uv+uvoff.yw).xyz;
-    max_g = max(max_g, col1.y);
-    min_g = min(min_g, col1.y);
-    colw = col1;
-    col1 = texture(u_texture, uv+uvoff.xy).xyz;
-    max_g = max(max_g, col1.y);
-    min_g = min(min_g, col1.y);
-    colw += col1;
-    col1 = texture(u_texture, uv+uvoff.yz).xyz;
-    max_g = max(max_g, col1.y);
-    min_g = min(min_g, col1.y);
-    colw += col1;
-    col1 = texture(u_texture, uv-uvoff.xy).xyz;
-    max_g = max(max_g, col1.y);
-    min_g = min(min_g, col1.y);
-    colw += col1;
-    float d_min_g = min_g;
-    float d_max_g = 1.-max_g;
-    float A;
-    if (d_max_g < d_min_g) {
-        A = d_max_g / max_g;
-    } else {
-        A = d_min_g / max_g;
-    }
-    A = sqrt(A);
-    A *= mix(-.125, -.2, muv.y);
-    vec3 col_out = (col + colw * A) / (1.+4.*A);
-    if (uv.x > (muv.x-.002)) {
-        if (uv.x > (muv.x+.002)) {
-            col_out = col;
-        } else {
-            col_out = vec3(0);
-        }
-    }
-    color = vec4(col_out,1);
-}
-`;
+const BUFFER_SIZE = 3072 / DOWNSCALE_FACTOR;
 
 let rotationAngle = 0.7;
 
@@ -128,23 +49,29 @@ const createProjectionMatrix = (w: number, h: number, x?: number, y?: number) =>
 
 const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivElement, opticProfile: Float32Array): FCADewarpHandle => {
     const compiler = shaderCompiler(gl);
-    const {
-        program: dewarpProgram,
-        bindings: dewarpBindings
-    } = compiler.compileProgram({vertexShader: dewarpVertexShader, fragmentShader: dewarpFragmentShader});
-    const {program: postProcessProgram, bindings: fidelityCASBindings} = compiler.compileProgram({vertexShader: amdFidelityCASVShader, fragmentShader: amdFidelityCASFShader});
+    const AXISDewarp =  compiler.compileProgram({
+        vertexShader: AXISDewarpVertexShaderWebGL2,
+        fragmentShader: AXISDewarpFragmentShaderWebGL2
+    });
+    const AMDFidelityCAS = compiler.compileProgram({
+        vertexShader: AMDFidelityCASVShaderWebGL2,
+        fragmentShader: AMDFidelityCASFShaderWebGL2
+    });
 
-    const vaoObj = createVAO(gl, dewarpBindings);
-    const vaoObj2 = createVAO(gl, fidelityCASBindings);
+    const SimpleCopy = compiler.compileProgram();
+
+    const vaoObj = createVAO(gl, AXISDewarp.bindings);
+    const vaoObj2 = createVAO(gl, AMDFidelityCAS.bindings);
+    const vaoObj3 = createVAO(gl, SimpleCopy.bindings);
 
     let frameCounter = 0;
 
     const drawQuad = (vao: any, bindings: FCAGLBindingMap, programSetup: (gl: WebGL2RenderingContext) => void, tex: FCAGLTextureObject, fbo: FAGLFBOObject | null, textureUnit: GLenum) => {
         gl.bindFramebuffer(gl.FRAMEBUFFER, fbo ? fbo.fbo : null);
-        if(fbo?.texObject) {
+        if (fbo?.texObject) {
             gl.viewport(0, 0, fbo.texObject.width, fbo.texObject.height);
         } else {
-            gl.viewport(0,0,gl.canvas.width, gl.canvas.height);
+            gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
         }
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -159,14 +86,13 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
         if (bindings.uniform!.u_matrix) {
             const matrix = createProjectionMatrix(downsampleCtx.width, downsampleCtx.height, 0, 0);
             mat4.scale(matrix, matrix, [downsampleCtx.width, downsampleCtx.height, 1]);
-
             gl.uniformMatrix4fv(bindings.uniform!.u_matrix.address, false, matrix);
         }
 
         gl.drawArrays(gl.TRIANGLES, 0, vao.verticies);
     }
 
-    const createTexture = (w: number, h:number) => {
+    const createTexture = (w: number, h: number) => {
         const tex = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, tex);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -177,10 +103,10 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
         return {tex: tex, width: w, height: h};
     }
 
-    type FAGLFBOObject = {fbo: WebGLFramebuffer, texObject: FCAGLTextureObject};
+    type FAGLFBOObject = { fbo: WebGLFramebuffer, texObject: FCAGLTextureObject };
 
-    const createFBO = (w: number, h: number) : FAGLFBOObject => {
-        const textureObject = createTexture(w,h);
+    const createFBO = (w: number, h: number): FAGLFBOObject => {
+        const textureObject = createTexture(w, h);
         const fb = gl.createFramebuffer();
         gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
         gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, textureObject.tex, 0)
@@ -195,6 +121,7 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
 
     const frameTexture = createTexture(downsampleCtx.width, downsampleCtx.height);
     const dewarpFBO = createFBO(downsampleCtx.width, downsampleCtx.height);
+    const postProcessFBO = createFBO(downsampleCtx.width, downsampleCtx.height);
 
     const sampleVideoFrame = (v: HTMLVideoElement | HTMLCanvasElement) => {
         let offsetX = 0;
@@ -202,11 +129,11 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
 
         gl.bindTexture(gl.TEXTURE_2D, frameTexture.tex);
 
-        if(TUNING_CONSTANTS.workaroundSlowTexSubImage) {
+        if (TUNING_CONSTANTS.workaroundSlowTexSubImage) {
             gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, v.width, v.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, v);
         } else {
             gl.texSubImage2D(gl.TEXTURE_2D, 0, offsetX, offsetY,
-                frameTexture.width-offsetX, frameTexture.height-offsetY, gl.RGBA, gl.UNSIGNED_BYTE, v);
+                frameTexture.width - offsetX, frameTexture.height - offsetY, gl.RGBA, gl.UNSIGNED_BYTE, v);
         }
     }
 
@@ -220,36 +147,41 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
     }
 
     const updateRender = () => {
-        rotationAngle+=(Math.PI/180.0);
+        rotationAngle += (Math.PI / 180.0);
         if (frameSource) {
             updateFramebufferSize();
 
-            drawQuad(vaoObj, dewarpBindings, (gl) => {
-                gl.useProgram(dewarpProgram);
+            drawQuad(vaoObj, AXISDewarp.bindings, (gl) => {
+                gl.useProgram(AXISDewarp.program);
 
-                gl.uniform3fv(dewarpBindings.uniform!.rotateData.address,
-                  [0.0,(Math.PI/180.0)*55,
-                      -(Math.PI/180.0)*120]);
+                gl.uniform3fv(AXISDewarp.bindings.uniform!.rotateData.address,
+                    [0.0, (Math.PI / 180.0) * 55,
+                        -(Math.PI / 180.0) * 120]);
 
-                gl.uniform1f(dewarpBindings.uniform!.tangentOfFieldOfView.address, Math.tan((Math.PI/180.0)*30.0));
-                gl.uniform4fv(dewarpBindings.uniform!.LensProfile.address, opticProfile );
-                gl.uniform2fv(dewarpBindings.uniform!.video_size.address,[frameSource!.videoWidth,frameSource!.videoHeight]);
-                gl.uniform1i(dewarpBindings.uniform!.u_texture.address, 0);
+                gl.uniform1f(AXISDewarp.bindings.uniform!.tangentOfFieldOfView.address, Math.tan((Math.PI / 180.0) * 30.0));
+                gl.uniform4fv(AXISDewarp.bindings.uniform!.LensProfile.address, opticProfile);
+                gl.uniform2fv(AXISDewarp.bindings.uniform!.video_size.address, [frameSource!.videoWidth, frameSource!.videoHeight]);
+                gl.uniform1i(AXISDewarp.bindings.uniform!.u_texture.address, 0);
 
             }, frameTexture, dewarpFBO, gl.TEXTURE0);
 
             requestAnimationFrame(updateRender);
 
-            if((frameCounter++ & 0x3) === 0) {
-                downsample!.drawImage(frameSource!, 0,0, downsampleCtx.width, downsampleCtx.height);
+            frameCounter++;
+            //if ((frameCounter++ & 0x3) === 0) {
+                downsample!.drawImage(frameSource!, 0, 0, downsampleCtx.width, downsampleCtx.height);
                 sampleVideoFrame(downsampleCtx);
-            }
+            //}
+            drawQuad(vaoObj, AMDFidelityCAS.bindings, (gl) => {
+                gl.useProgram(AMDFidelityCAS.program);
+                gl.uniform1i(AMDFidelityCAS.bindings.uniform!.u_texture.address, 1);
+                gl.uniform1f(AMDFidelityCAS.bindings.uniform!.divider.address, .5 + Math.sin((Math.PI / 180.0) * frameCounter) * 0.5);
+            }, dewarpFBO.texObject, postProcessFBO, gl.TEXTURE1);
 
-            drawQuad(vaoObj2, fidelityCASBindings, (gl) => {
-                gl.useProgram(postProcessProgram);
-                gl.uniform1i(fidelityCASBindings.uniform!.u_texture.address, 1);
-                gl.uniform1f(fidelityCASBindings.uniform!.divider.address, .5+Math.sin((Math.PI/180.0)*frameCounter)*0.5);
-            }, dewarpFBO.texObject, null, gl.TEXTURE1);
+            drawQuad(vaoObj, SimpleCopy.bindings, (gl) => {
+                gl.useProgram(SimpleCopy.program);
+                gl.uniform1i(SimpleCopy.bindings.uniform!.u_texture.address, 2);
+            }, postProcessFBO.texObject, null, gl.TEXTURE2);
 
         } else {
             console.log('No frameSource');
@@ -258,7 +190,7 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
 
     return {
         startDewarp: (frame: HTMLVideoElement) => {
-            if(frameSource == null) {
+            if (frameSource == null) {
                 console.log('Starting dewarp');
                 frameSource = frame;
                 updateRender();
@@ -279,19 +211,19 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
 export const DewarpComponent: React.FC<React.PropsWithChildren<any>> =
     React.forwardRef(({children, lensProfile}, ref) => {
         const [glPipe, setGlPipeline] = useState<FCAGLPipeline | null>(null);
-        const [opticProfile, setOpticProfile] = useState<Float32Array>(new Float32Array([0,0,0,0]));
+        const [opticProfile, setOpticProfile] = useState<Float32Array>(new Float32Array([0, 0, 0, 0]));
 
         const containerRef = useRef<HTMLDivElement>(null);
         const canvasRef = useRef<HTMLCanvasElement>(null);
 
         useEffect(() => {
-            if(lensProfile) {
-                while(lensProfile.length<4) {
+            if (lensProfile) {
+                while (lensProfile.length < 4) {
                     lensProfile.unshift(0);
                 }
                 setOpticProfile(new Float32Array(lensProfile));
             }
-        },[lensProfile]);
+        }, [lensProfile]);
 
         useImperativeHandle(ref, () => ({
             startDewarp: (video: HTMLVideoElement) => {
@@ -326,7 +258,7 @@ export const DewarpComponent: React.FC<React.PropsWithChildren<any>> =
 
                 container.onmousemove = (ev) => {
                     ev.preventDefault();
-                    if(sampleMouse) {
+                    if (sampleMouse) {
                         //console.log('Move', ev.movementX, ev.movementY);
                     }
                 }
