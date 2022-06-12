@@ -61,11 +61,11 @@ export const shaderCompiler = (ctx: WebGL2RenderingContext) => {
         }
         ctx.shaderSource(shader, source)
         ctx.compileShader(shader);
-        const log = ctx.getShaderInfoLog(shader);
+    /*    const log = ctx.getShaderInfoLog(shader);
         if(log?.length) {
             console.error(log);
             source.split('\n').forEach((v, idx) => console.log(idx,'',v))
-        }
+        }*/
         return shader;
     }
 
@@ -120,11 +120,8 @@ export const shaderCompiler = (ctx: WebGL2RenderingContext) => {
 
     const compileProgram = (options?: { vertexShader?: string, fragmentShader?: string }) => {
         let vss = options?.vertexShader ?? vsSource;
-        let fss = options?.fragmentShader;
+        let fss = options?.fragmentShader ?? fsSource;
 
-        if (!options?.vertexShader || !fss) {
-            fss = fsSource;
-        }
         const bindings: FCAGLBindingMap = {};
 
         const vs = compileShaderFromSource(ctx.VERTEX_SHADER, vss);

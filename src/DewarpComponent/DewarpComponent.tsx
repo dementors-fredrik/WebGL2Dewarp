@@ -1,16 +1,10 @@
 import React, {useEffect, useImperativeHandle, useRef, useState} from "react";
-import {FCAGLBindingMap, shaderCompiler} from "./FCAShaderCompiler";
+import {FCAGLBindingMap, shaderCompiler} from "./FCAEngine/FCAShaderCompiler";
 import {mat4} from 'gl-matrix';
 import {AXISDewarpFragmentShaderWebGL2, AXISDewarpVertexShaderWebGL2} from "./Shaders/AXISDewarpShader";
-import {AMDFidelityCASFShaderWebGL2, AMDFidelityCASVShaderWebGL2} from "./Shaders/AMDFidelityFXCASShader";
-
-type FCAGLPipeline = { startDewarp: (video: HTMLVideoElement) => void, stopRender: () => void };
-
-type FCAGLTextureObject = {
-    tex: WebGLTexture | null;
-    width: number;
-    height: number;
-}
+import {AMDFidelityCASFShaderWebGL2} from "./Shaders/AMDFidelityFXCASShader";
+import {FCAGLPipeline, FCAGLTextureObject} from "./FCAEngine/FCAPipeline";
+import {AMDFidelityFXCAS} from "./Shaders/AMDFidelityFXCAS";
 
 export type FCADewarpHandle =
     { stopRender: () => void; startDewarp: (frame: HTMLVideoElement) => void; shutdown: () => void }
@@ -19,8 +13,8 @@ const TUNING_CONSTANTS = {
     workaroundSlowTexSubImage: true
 };
 
-let DOWNSCALE_FACTOR = 2.0;
-const BUFFER_SIZE = 3072 / DOWNSCALE_FACTOR;
+let DOWNSCALE_FACTOR = 1.0;
+const BUFFER_SIZE = 2048 / DOWNSCALE_FACTOR;
 
 let rotationAngle = 0.7;
 
@@ -54,8 +48,7 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
         fragmentShader: AXISDewarpFragmentShaderWebGL2
     });
     const AMDFidelityCAS = compiler.compileProgram({
-        vertexShader: AMDFidelityCASVShaderWebGL2,
-        fragmentShader: AMDFidelityCASFShaderWebGL2
+        fragmentShader: AMDFidelityFXCAS
     });
 
     const SimpleCopy = compiler.compileProgram();
@@ -147,6 +140,7 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
     }
 
     const updateRender = () => {
+        frameCounter++;
         rotationAngle += (Math.PI / 180.0);
         if (frameSource) {
             updateFramebufferSize();
@@ -165,17 +159,15 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
 
             }, frameTexture, dewarpFBO, gl.TEXTURE0);
 
-            requestAnimationFrame(updateRender);
 
-            frameCounter++;
             //if ((frameCounter++ & 0x3) === 0) {
                 downsample!.drawImage(frameSource!, 0, 0, downsampleCtx.width, downsampleCtx.height);
                 sampleVideoFrame(downsampleCtx);
             //}
+
             drawQuad(vaoObj, AMDFidelityCAS.bindings, (gl) => {
                 gl.useProgram(AMDFidelityCAS.program);
                 gl.uniform1i(AMDFidelityCAS.bindings.uniform!.u_texture.address, 1);
-                gl.uniform1f(AMDFidelityCAS.bindings.uniform!.divider.address, .5 + Math.sin((Math.PI / 180.0) * frameCounter) * 0.5);
             }, dewarpFBO.texObject, postProcessFBO, gl.TEXTURE1);
 
             drawQuad(vaoObj, SimpleCopy.bindings, (gl) => {
@@ -183,6 +175,7 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
                 gl.uniform1i(SimpleCopy.bindings.uniform!.u_texture.address, 2);
             }, postProcessFBO.texObject, null, gl.TEXTURE2);
 
+            requestAnimationFrame(updateRender);
         } else {
             console.log('No frameSource');
         }
