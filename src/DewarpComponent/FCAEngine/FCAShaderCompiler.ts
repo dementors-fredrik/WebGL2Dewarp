@@ -29,15 +29,18 @@ const linkBindings = (bindings: FCAGLBindingMap, type: FCAGLShaderTypes, resolve
 
 export const shaderCompiler = (ctx: WebGL2RenderingContext) => {
     const vsSource = `#version 300 es
+    precision highp float;
+
     in vec4 a_position;
     in vec2 a_texcoord;
-    
+    in float a_flip;
     uniform mat4 u_matrix;
     
     out vec2 v_texcoord;
     
     void main() {
-      gl_Position = u_matrix * a_position;
+      gl_Position = u_matrix * vec4(a_position.xyz, 1);
+      
       v_texcoord = a_texcoord;
     }
 `;

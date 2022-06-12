@@ -1,45 +1,57 @@
 import React, {useEffect, useImperativeHandle, useRef, useState} from "react";
 import {FCAGLBindingMap, shaderCompiler} from "./FCAEngine/FCAShaderCompiler";
-import {mat4} from 'gl-matrix';
+import {mat4, mat2, glMatrix} from 'gl-matrix';
 import {AXISDewarpFragmentShaderWebGL2, AXISDewarpVertexShaderWebGL2} from "./Shaders/AXISDewarpShader";
-import {AMDFidelityCASFShaderWebGL2} from "./Shaders/AMDFidelityFXCASShader";
-import {FCAGLPipeline, FCAGLTextureObject} from "./FCAEngine/FCAPipeline";
+import {createVAO, FCAGLPipeline, FCAGLTextureObject} from "./FCAEngine/FCAPipeline";
 import {AMDFidelityFXCAS} from "./Shaders/AMDFidelityFXCAS";
+glMatrix.setMatrixArrayType(Array);
 
 export type FCADewarpHandle =
     { stopRender: () => void; startDewarp: (frame: HTMLVideoElement) => void; shutdown: () => void }
 
 const TUNING_CONSTANTS = {
-    workaroundSlowTexSubImage: true
+    workaroundSlowTexSubImage: false
 };
 
 let DOWNSCALE_FACTOR = 1.0;
 const BUFFER_SIZE = 2048 / DOWNSCALE_FACTOR;
 
 let rotationAngle = 0.7;
+let depth=0;
 
-const createVAO = (gl: WebGL2RenderingContext, bindings: FCAGLBindingMap) => {
-    const vao = gl.createVertexArray();
-    gl.bindVertexArray(vao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
-    const screenQuad = [0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 1];
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(screenQuad), gl.STATIC_DRAW);
-
-    gl.enableVertexAttribArray(bindings.in!.a_position.address!);
-    gl.vertexAttribPointer(bindings.in!.a_position.address!, 2, gl.FLOAT, false, 0, 0);
-    if (bindings!.in!.a_texcoord) {
-        gl.enableVertexAttribArray(bindings!.in!.a_texcoord.address!);
-        gl.vertexAttribPointer(bindings!.in!.a_texcoord.address!, 2, gl.FLOAT, true, 0, 0);
-    }
-    return {vao: vao, verticies: screenQuad.length / 2};
-}
-
+/*
 const createProjectionMatrix = (w: number, h: number, x?: number, y?: number) => {
-    let m = mat4.create();
-    mat4.ortho(m, 0, w, h, 0, -1, 1);
-    mat4.translate(m, m, [x || 0, y || 0, 0]);
-    return m;
-}
+    const projectionMatrix = mat4.create();
+    const cameraMatrix = mat4.create();
+    const viewMatrix = mat4.create();
+    const viewProjection = mat4.create();
+    //mat4.ortho(m, 0, w, h, 0, -10, 10);
+
+    mat4.identity(projectionMatrix);
+    mat4.perspective(projectionMatrix,Math.PI/4,w/h,1/256,1000);
+
+    mat4.copy(cameraMatrix,projectionMatrix);
+   // mat4.translate(cameraMatrix, cameraMatrix,[ 0, 0, depth+=0.1  ]);
+
+    mat4.rotateX(cameraMatrix, projectionMatrix,rotationAngle);// Math.PI/180.0 * 40);
+    mat4.rotateY(cameraMatrix, cameraMatrix,rotationAngle);// Math.PI/180.0 * 40);
+    mat4.rotateZ(cameraMatrix, cameraMatrix,rotationAngle);// Math.PI/180.0 * 40);
+
+    console.log(depth);
+
+    mat4.invert(viewMatrix, cameraMatrix);
+    mat4.translate(viewMatrix, viewMatrix,[ 0, 0, 0]);
+
+    mat4.multiply(viewProjection, projectionMatrix, viewMatrix);
+
+   // mat4.translate(projectionMatrix, projectionMatrix, [x || 0, y || 0, 0]);
+
+  //  mat4.rotateY(m,m,rotationAngle);//(Math.PI/180.0) * 10.0 );
+    //mat4.frustum(m, 0, w, h, 0, -0, 1);
+    //mat4.perspectiveFromFieldOfView(m, 90, 0, 10);
+
+    return viewProjection;
+}*/
 
 const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivElement, opticProfile: Float32Array): FCADewarpHandle => {
     const compiler = shaderCompiler(gl);
@@ -50,12 +62,43 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
     const AMDFidelityCAS = compiler.compileProgram({
         fragmentShader: AMDFidelityFXCAS
     });
-
     const SimpleCopy = compiler.compileProgram();
 
-    const vaoObj = createVAO(gl, AXISDewarp.bindings);
-    const vaoObj2 = createVAO(gl, AMDFidelityCAS.bindings);
-    const vaoObj3 = createVAO(gl, SimpleCopy.bindings);
+    const Solid = compiler.compileProgram({
+vertexShader:`#version 300 es
+    precision highp float;
+
+    in vec4 a_position;
+    in vec2 a_texcoord;
+    in float a_flip;
+    uniform mat4 u_projection;
+    uniform mat4 u_view;
+    uniform mat4 u_model;
+    
+    out vec2 v_texcoord;
+    
+    void main() {
+      gl_Position = u_projection * u_view * u_model * vec4(a_position.xyz,1.0);
+      v_texcoord = a_texcoord;
+    }
+`,
+
+  fragmentShader: `#version 300 es
+    precision highp float;
+     
+    in vec2 v_texcoord;
+    uniform sampler2D u_texture;
+    out vec4 color;
+     
+    void main() {
+       color = vec4(1.,0.,0.,1.);
+    }
+`
+    });
+    const vaoObj = createVAO(gl, AXISDewarp.bindings, true);
+    const vaoObj2 = createVAO(gl, AMDFidelityCAS.bindings, true);
+    const vaoObj3 = createVAO(gl, SimpleCopy.bindings, true);
+    const solid = createVAO(gl, Solid.bindings, false);
 
     let frameCounter = 0;
 
@@ -66,8 +109,12 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
         } else {
             gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
         }
-        gl.clearColor(0, 0, 0, 0);
+        gl.clearColor(0, 0, 0, 1);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        //gl.enable(gl.DEPTH_TEST);
+
+        // tell webgl to cull faces
+        //gl.enable(gl.CULL_FACE);
 
         programSetup(gl);
 
@@ -76,13 +123,31 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
         gl.activeTexture(textureUnit);
         gl.bindTexture(gl.TEXTURE_2D, tex.tex);
 
-        if (bindings.uniform!.u_matrix) {
-            const matrix = createProjectionMatrix(downsampleCtx.width, downsampleCtx.height, 0, 0);
-            mat4.scale(matrix, matrix, [downsampleCtx.width, downsampleCtx.height, 1]);
-            gl.uniformMatrix4fv(bindings.uniform!.u_matrix.address, false, matrix);
-        }
+            //let matrix = createProjectionMatrix(gl.canvas.width, gl.canvas.height, downsampleCtx.width, downsampleCtx.height);
+            //mat4.scale(matrix, matrix, [downsampleCtx.width, downsampleCtx.height, 1]);
 
-        gl.drawArrays(gl.TRIANGLES, 0, vao.verticies);
+        const projection = mat4.create();
+        mat4.identity(projection);
+        mat4.perspective(projection,90 * Math.PI/180,gl.canvas.width/gl.canvas.height,0.0,100);
+        //mat4.ortho(projection, -10,10,-10,10,-10,10);
+        gl.uniformMatrix4fv(bindings.uniform!.u_projection.address, false, projection);
+        const view = mat4.create();
+        mat4.identity(view);
+        mat4.lookAt(view,[0,0,10],[0,0,0],[0,1,0]);
+        gl.uniformMatrix4fv(bindings.uniform!.u_view.address, false, view);
+
+        const model = mat4.create();
+        mat4.identity(model);
+      //  mat4.fromScaling(model,[20,20,20]);
+        //mat4.fromScaling(model, [.5,.5,.5]);
+       // mat4.translate(model,model,[0,0,9]);
+        depth++;
+        mat4.rotateZ(model,model,depth * Math.PI/180 )
+        gl.uniformMatrix4fv(bindings.uniform!.u_model.address, false, model);
+
+     //   console.log(bindings.uniform!.u_model.get());
+
+        gl.drawArrays(gl.TRIANGLES, 0, vao.vertices);
     }
 
     const createTexture = (w: number, h: number) => {
@@ -135,8 +200,8 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
         const bbox = container.getBoundingClientRect();
         const w = bbox.width - bbox.left;
         const h = bbox.height - bbox.top;
-        gl.canvas.width = w;
-        gl.canvas.height = h;
+        gl.canvas.width = window.innerWidth;//w;
+        gl.canvas.height = window.innerHeight;//h;
     }
 
     const updateRender = () => {
@@ -144,7 +209,11 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
         rotationAngle += (Math.PI / 180.0);
         if (frameSource) {
             updateFramebufferSize();
-
+            drawQuad(solid, Solid.bindings, (gl) => {
+                gl.useProgram(Solid.program);
+//                gl.uniform1i(Solid.bindings.uniform!.u_texture.address, 1);
+            }, frameTexture, null, gl.TEXTURE0);
+/*
             drawQuad(vaoObj, AXISDewarp.bindings, (gl) => {
                 gl.useProgram(AXISDewarp.program);
 
@@ -174,8 +243,10 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
                 gl.useProgram(SimpleCopy.program);
                 gl.uniform1i(SimpleCopy.bindings.uniform!.u_texture.address, 2);
             }, postProcessFBO.texObject, null, gl.TEXTURE2);
-
-            requestAnimationFrame(updateRender);
+*/
+            requestAnimationFrame(() => {
+                updateRender()
+            });
         } else {
             console.log('No frameSource');
         }
