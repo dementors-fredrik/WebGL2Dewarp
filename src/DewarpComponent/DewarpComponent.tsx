@@ -13,8 +13,8 @@ export type DewarpComponentHandle = {
 };
 
 const uniformBuffer = {
-    rotation: [0,0,0],
-    FOV: 360*Math.PI/180.0
+    rotation: [0,Math.PI/2,0],
+    FOV: 45*Math.PI/180.0
 };
 
 export const DewarpComponent: React.FC<React.PropsWithChildren<any>> =
@@ -37,6 +37,9 @@ export const DewarpComponent: React.FC<React.PropsWithChildren<any>> =
         useImperativeHandle(ref, () => ({
             start: (video: HTMLVideoElement) => {
                 if (glPipe) {
+                    const c = uniformBuffer.rotation;
+                    uniformBuffer.rotation = [c[0], c[1], c[2]];
+
                     glPipe.start(video);
                 } else {
                     console.error('glpipeline is not ready yet!');
@@ -91,7 +94,7 @@ export const DewarpComponent: React.FC<React.PropsWithChildren<any>> =
                     ev.preventDefault();
                     if (sampleMouse) {
                         const c = uniformBuffer.rotation;
-                        uniformBuffer.rotation = [toRad(ev.movementX/10.0)+c[0], toRad(ev.movementY/10.0)+c[1],0];
+                        uniformBuffer.rotation = [toRad(ev.movementX/10.0)+c[0], toRad(ev.movementY/10.0)+c[1],c[2]];
                     }
                 }
 
@@ -116,7 +119,7 @@ export const DewarpComponent: React.FC<React.PropsWithChildren<any>> =
 
         }, [canvasRef, containerRef, opticProfile]);
 
-        return (<div ref={containerRef} style={{width: "100%", height: "100%", overflow: 'hidden'}}>
+        return (<div ref={containerRef} style={{width: "90%", height: "90%", overflow: 'hidden'}}>
             <div style={{position: 'relative'}}>
                 <canvas ref={canvasRef} style={{left: '0px', top: '0px', position: 'absolute'}}></canvas>
                 <div style={{left: '0px', top: '0px'}}>

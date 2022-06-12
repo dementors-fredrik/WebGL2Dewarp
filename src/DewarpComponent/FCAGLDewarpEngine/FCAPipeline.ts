@@ -1,7 +1,7 @@
 import {FCAGLBindingMap, FCAGLProgramBundle, FCAGLUniformType, shaderCompiler} from "./FCAShaderCompiler";
 import {AXISDewarpFragmentShaderWebGL2, AXISDewarpVertexShaderWebGL2} from "../Shaders/AXISDewarpShader";
 import {AMDFidelityFXCAS} from "../Shaders/AMDFidelityFXCAS";
-import {mat4,glMatrix} from "gl-matrix";
+import {mat4, glMatrix} from "gl-matrix";
 
 const TUNING_CONSTANTS = {
     workaroundSlowTexSubImage: false,
@@ -31,7 +31,7 @@ export const createVAO = (gl: WebGL2RenderingContext, bindings: FCAGLBindingMap,
     const vaoBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, vaoBuffer);
 
-    const screenQuad = [
+    /*const screenQuad = [
         -1.0, -1.0,  0.0,
         1.0, -1.0,  0.0,
         1.0,  1.0,  0.0,
@@ -48,11 +48,29 @@ export const createVAO = (gl: WebGL2RenderingContext, bindings: FCAGLBindingMap,
         1.0,  1.0,
         0.0,  1.0,
     ];
+    */
+
+    const screenQuad = [1, -1, 0,
+        -1, 1, 0,
+        1, 1, 0,
+        1, -1, 0,
+        -1, -1, 0,
+        -1, 1, 0];
+
+    const texQuad = [1, 0,
+        0, 1,
+        1, 1,
+        1, 0,
+        0, 0,
+        0, 1];
+
 
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(screenQuad), gl.STATIC_DRAW);
 
-    gl.enableVertexAttribArray(bindings.in!.a_position.address!);
-    gl.vertexAttribPointer(bindings.in!.a_position.address!, 3, gl.FLOAT, false, 0, 0);
+    if (bindings.in!.a_position) {
+        gl.enableVertexAttribArray(bindings.in!.a_position.address!);
+        gl.vertexAttribPointer(bindings.in!.a_position.address!, 3, gl.FLOAT, false, 0, 0);
+    }
 
     const texBuffer = gl.createBuffer();
     if (bindings!.in!.a_texcoord) {
@@ -66,15 +84,10 @@ export const createVAO = (gl: WebGL2RenderingContext, bindings: FCAGLBindingMap,
     }
     return {vao: vao, vertices: screenQuad.length / 3, buffers: [vaoBuffer]};
 }
-/*
-export type FCADewarpHandle =
-    {
-        setRotationVectors: (rotationVector: Array<number>) => void; stop: () => void; start: (frame: HTMLVideoElement) => void; shutdown: () => void
-    }
-*/
+
 let rotationAngle = 0.0;
 
-export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HTMLDivElement, opticProfile: Float32Array, uniformBuffer : { rotation: Array<number>, FOV: number}): FCAGLPipeline => {
+export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HTMLDivElement, opticProfile: Float32Array, uniformBuffer: { rotation: Array<number>, FOV: number }): FCAGLPipeline => {
     let FOV = 1.4;//Math.tan(90 * Math.PI/180.0);
     glMatrix.setMatrixArrayType(Array);
     const compiler = shaderCompiler(gl);
@@ -191,7 +204,6 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
             updateFramebufferSize();
 
 
-
             // The render loop runs at screen refresh speed, this means we likely refresh at least 60 times a second
             // the camera stream is unlikely to have an fps higher than 30
             // so we sample every other frame (30 fps effective speed)
@@ -205,7 +217,8 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
                     gl.bindTexture(gl.TEXTURE_2D, frameTexture.tex);
                     gl.uniform1i(uniform.u_texture.address, 0);
 
-                    gl.uniform3fv(uniform.rotateData.address, uniformBuffer.rotation);
+                    const r = uniformBuffer.rotation;
+                    gl.uniform3fv(uniform.rotateData.address, [0, -(r[1] + Math.PI / 2), r[0] + Math.PI / 2]);
                     gl.uniform1f(uniform.tangentOfFieldOfView.address, uniformBuffer.FOV);
 
                     gl.uniform4fv(uniform.LensProfile.address, opticProfile);
@@ -213,9 +226,11 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
 
                     const projection = mat4.create();
                     mat4.identity(projection);
-                    mat4.ortho(projection, 0, BUFFER_SIZE, BUFFER_SIZE, 0, -1, 1);
-                    mat4.scale(projection, projection, [downsampleCtx.width, downsampleCtx.height, 1]);
-                    mat4.translate(projection, projection, [.5, .5, 0]);
+                    //mat4.ortho(projection, 0, 1, 1, 0, -1, 1);
+                    mat4.ortho(projection, -downsampleCtx.width / 2, downsampleCtx.width / 2, downsampleCtx.height / 2, -downsampleCtx.height / 2, -1, 1);
+                    mat4.scale(projection, projection, [downsampleCtx.width / 2, downsampleCtx.height / 2, 1]);
+                    mat4.scale(projection, projection, [1, -1, 1]);
+
                     gl.uniformMatrix4fv(uniform.u_projection.address, false, projection);
                     const view = mat4.create();
                     mat4.identity(view);
@@ -223,9 +238,11 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
 
                     const model = mat4.create();
                     mat4.identity(model);
-                    mat4.scale(model, model, [1, -1, 1]);
+                    //   mat4.scale(model,model,[.5,.5,1]);
+                    //mat4.scale(model, model, [1, -1, 1]);
 
                     gl.uniformMatrix4fv(uniform.u_model.address, false, model);
+
                 }, dewarpFBO);
 
                 drawVAO(vaoObj, AMDFidelityCAS, (gl, uniform) => {
@@ -267,9 +284,9 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
 
                 const model = mat4.create();
                 mat4.identity(model);
-                mat4.translate(model,model,[0,0,-.2]);
-               // mat4.rotateX(model, model, frameCounter*.1 * Math.PI / 180)
-               // mat4.rotateY(model, model, frameCounter*.1 * Math.PI / 180)
+                mat4.translate(model, model, [0, 0, -.2]);
+                // mat4.rotateX(model, model, frameCounter*.1 * Math.PI / 180)
+                // mat4.rotateY(model, model, frameCounter*.1 * Math.PI / 180)
                 gl.uniformMatrix4fv(uniform.u_model.address, false, model);
             }, null);
 
@@ -290,7 +307,7 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
             }
         },
 
-        setFOV : (fov: number) => {
+        setFOV: (fov: number) => {
             FOV = Math.tan(fov);
         },
 

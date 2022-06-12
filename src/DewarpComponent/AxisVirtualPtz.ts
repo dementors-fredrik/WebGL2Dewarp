@@ -24,10 +24,10 @@ export namespace AxisVirtualPtz {
         switch (mode) {
             case CEILING:
                 console.log('Ceiling');
-                return [-(tilt + QUADRANT), pan + QUADRANT,0];
+                return [0, -(tilt + QUADRANT), pan + QUADRANT];
             case DESK:
                 console.log('Deskt');
-                return [-(tilt - QUADRANT), -pan - QUADRANT,0];
+                return [0,-(tilt - QUADRANT), -pan - QUADRANT];
             case WALL:
                 console.log('Wall');
                 return [0,-tilt, pan];
