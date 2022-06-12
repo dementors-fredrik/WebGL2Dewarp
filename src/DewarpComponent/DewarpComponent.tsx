@@ -12,7 +12,8 @@ export type FCADewarpHandle =
     { stopRender: () => void; startDewarp: (frame: HTMLVideoElement) => void; shutdown: () => void }
 
 const TUNING_CONSTANTS = {
-    workaroundSlowTexSubImage: false
+    workaroundSlowTexSubImage: false,
+    textureFiltering: true
 };
 
 let DOWNSCALE_FACTOR = 2.0;
@@ -76,8 +77,9 @@ const configureWebGL2Pipeline = (gl: WebGL2RenderingContext, container: HTMLDivE
         gl.bindTexture(gl.TEXTURE_2D, tex);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        const filter = TUNING_CONSTANTS.textureFiltering ? gl.LINEAR : gl.NEAREST;
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
         return {tex: tex, width: w, height: h};
     }

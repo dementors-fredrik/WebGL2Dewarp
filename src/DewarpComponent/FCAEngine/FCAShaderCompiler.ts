@@ -66,11 +66,11 @@ export const shaderCompiler = (ctx: WebGL2RenderingContext) => {
         }
         ctx.shaderSource(shader, source)
         ctx.compileShader(shader);
-    /*    const log = ctx.getShaderInfoLog(shader);
+        const log = ctx.getShaderInfoLog(shader);
         if(log?.length) {
             console.error(log);
             source.split('\n').forEach((v, idx) => console.log(idx,'',v))
-        }*/
+        }
         return shader;
     }
 
