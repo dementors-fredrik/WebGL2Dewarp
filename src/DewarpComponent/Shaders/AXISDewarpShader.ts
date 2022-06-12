@@ -105,33 +105,17 @@ void main(void)
 export const AXISDewarpVertexShaderWebGL2 = `#version 300 es
 in vec4 a_position;
 in vec2 a_texcoord;
-uniform mat4 u_matrix;
-uniform sampler2D u_texture;
-uniform float height;
-uniform float width;
 
 out vec2 uv;
-//out vec2 size;
+
+uniform mat4 u_projection;
+uniform mat4 u_view;
+uniform mat4 u_model;
 
 void main() {
-//  size = vec2(textureSize(u_texture, 0));
-
-
-/*  vec2 rscale = vec2(size.x / size.y, size.y / size.x);
-  vec2 aspectScale = vec2(0.0);
-  float check = float(height * rscale.x < width);
-
-  aspectScale += check * vec2(height * rscale.x, height);
-  aspectScale += (1.0 - check) * vec2(width, width * rscale.y);
-  aspectScale /= vec2(width, height);
-
-  vec2 scaled = a_position.xy * aspectScale;
-
-  scaled += (1.0 - aspectScale) / 2.0;*/
-
   uv = a_texcoord;
 
   vec2 pos = a_position.xy;
-  gl_Position = u_matrix * a_position; 
+  gl_Position = u_projection * u_view * u_model * vec4(a_position.xyz,1.0);
 }
 `;

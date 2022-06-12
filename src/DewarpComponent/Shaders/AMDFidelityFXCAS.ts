@@ -2944,22 +2944,19 @@ void CasFilter(
  
 void main() {
     vec2 textureRes = vec2(textureSize(u_texture, 0));
-
-    vec2 uv = v_texcoord;
+    uvec2 point = uvec2(vec2(v_texcoord) * textureRes);
     
-    vec2 m = vec2(0.5,0.0);
-    uv.y=1.-uv.y;
-    uvec2 point = uvec2(vec2(uv) * textureRes);
-    
-    float sharpnessTuning = 0.5f;
+    float sharpnessTuning = 0.0f;
     uvec4 const0;
     uvec4 const1;
+    
     vec4 outputColor = vec4(0,0,0,1);
     
     CasSetup(const0, const1, sharpnessTuning, textureRes.x, textureRes.y, 
              textureRes.x, textureRes.y);
 
-    float r,g,b;
+    float r,g,b; // Safari appears to have a bug that triggers if
+                 // the output is passed to a vector instead of individual components
     CasFilter(r, g, b, point, const0, const1, true);    
     color = vec4(r,g,b,1.0);
 }`;

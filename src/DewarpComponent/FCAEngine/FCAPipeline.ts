@@ -15,14 +15,23 @@ export const createVAO = (gl: WebGL2RenderingContext, bindings: FCAGLBindingMap,
     const vaoBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, vaoBuffer);
 
-    const screenQuad = [-.5, -.5, 0,
-                        -.5, .5, 0,
-                        .5, -.5, 0,
-                        .5, -.5, 0,
-                        -.5, .5, 0,
-                        .5, .5, 0];
-    const texQuad = [0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 1];
+    const screenQuad = [
+        -1.0, -1.0,  0.0,
+        1.0, -1.0,  0.0,
+        1.0,  1.0,  0.0,
+        -1.0, -1.0,  0.0,
+        1.0,  1.0,  0.0,
+        -1.0,  1.0,  0.0
+    ];
 
+    const texQuad = [
+        0.0,  0.0,
+        1.0,  0.0,
+        1.0,  1.0,
+        0.0,  0.0,
+        1.0,  1.0,
+        0.0,  1.0,
+    ];
 
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(screenQuad), gl.STATIC_DRAW);
 

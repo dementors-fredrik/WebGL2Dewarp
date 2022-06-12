@@ -1,7 +1,10 @@
 /*
-    Fragment shader
+    AMDFidelityFX CAS reimplementation from ShaderToy
+
+    https://www.shadertoy.com/view/ftsXzM
  */
-export const AMDFidelityCASFShaderWebGL2 = `#version 300 es
+
+export const AMDFidelityCASFShaderToy = `#version 300 es
 precision highp float;
  
 in vec2 v_texcoord;

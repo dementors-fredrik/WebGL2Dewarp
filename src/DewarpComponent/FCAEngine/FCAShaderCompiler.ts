@@ -2,7 +2,7 @@ type FCAGLAttributeProps = { set: (value: any) => void, address: GLenum | null, 
 type FCAGLAttributeType = Record<string, FCAGLAttributeProps>;
 
 type FCAGLUniformProps = { set: (value: any) => void, address: WebGLUniformLocation | null, get: () => unknown }
-type FCAGLUniformType = Record<string, FCAGLUniformProps>;
+export type FCAGLUniformType = Record<string, FCAGLUniformProps>;
 
 enum FCAGLShaderTypes {
     uniform = 'uniform',
@@ -11,6 +11,7 @@ enum FCAGLShaderTypes {
 
 export type FCAGLBindingMap = { [FCAGLShaderTypes.uniform]?: FCAGLUniformType, [FCAGLShaderTypes.attribute]?: FCAGLAttributeType };
 type FCAGLGenericType = FCAGLUniformType | FCAGLAttributeType;
+export type FCAGLProgramBundle = {program: WebGLProgram, bindings: FCAGLBindingMap};
 
 const linkBindings = (bindings: FCAGLBindingMap, type: FCAGLShaderTypes, resolver: (name: string, atype: string) => FCAGLAttributeProps | FCAGLUniformProps | null) => {
     for (const name in bindings[type]) {
@@ -33,14 +34,15 @@ export const shaderCompiler = (ctx: WebGL2RenderingContext) => {
 
     in vec4 a_position;
     in vec2 a_texcoord;
-    in float a_flip;
-    uniform mat4 u_matrix;
     
     out vec2 v_texcoord;
+
+    uniform mat4 u_projection;
+    uniform mat4 u_view;
+    uniform mat4 u_model;
     
     void main() {
-      gl_Position = u_matrix * vec4(a_position.xyz, 1);
-      
+      gl_Position = u_projection * u_view * u_model * vec4(a_position.xyz,1.0);
       v_texcoord = a_texcoord;
     }
 `;
@@ -72,7 +74,7 @@ export const shaderCompiler = (ctx: WebGL2RenderingContext) => {
         return shader;
     }
 
-    const createProgram = (bindings: FCAGLBindingMap, shaders: WebGLShader[]) => {
+    const createProgram = (bindings: FCAGLBindingMap, shaders: WebGLShader[]) : FCAGLProgramBundle => {
         const program = ctx.createProgram()!;
 
         for (const shader of shaders) {

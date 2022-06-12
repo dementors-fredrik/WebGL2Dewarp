@@ -35,16 +35,11 @@ function App() {
 
     }, [glueCallback]);
 
-        useEffect(() => {
-            console.log("trigger");
-            const v = document.createElement('video');
-            processFrame(v);
-        },[processFrame])
 
     return (
         <div style={{width: '100%', height: '100%'}}>
             <DewarpComponent ref={glueCallback} lensProfile={lensProfile}>
-                {/*   <VideoComponent onPlaybackStarted={processFrame}/> */}
+                <VideoComponent onPlaybackStarted={processFrame}/>
             </DewarpComponent>)
         </div>
     );
