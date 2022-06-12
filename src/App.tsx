@@ -1,6 +1,7 @@
 import React, {useCallback, useEffect, useRef} from 'react';
-import {DewarpComponent, FCADewarpHandle} from "./DewarpComponent/DewarpComponent";
+import {DewarpComponent, DewarpComponentHandle} from "./DewarpComponent/DewarpComponent";
 import videoSrc from './assets/video.mp4';
+//import {} from "./DewarpComponent/FCAGLDewarpEngine/FCAPipeline";
 
 
 const VideoComponent: React.FC<{ onPlaybackStarted: any }> = ({onPlaybackStarted}) => {
@@ -19,26 +20,24 @@ const VideoComponent: React.FC<{ onPlaybackStarted: any }> = ({onPlaybackStarted
 }
 
 function App() {
-    const glueCallback = useRef<FCADewarpHandle>(null);
+    const dewarpEngine = useRef<DewarpComponentHandle>(null);
 
     const lensProfile = [113.889694,-60.882477,751.488831];
     const ptzSetting = {x: 4.109286700809463, y: -0.9885839816668688, fov: 0.8351400470792861};
 
     const processFrame = useCallback((v: HTMLVideoElement) => {
-        if (glueCallback.current) {
-            setTimeout(() => {
-                glueCallback.current!.startDewarp(v);
-            },100);
+        if (dewarpEngine.current) {
+            dewarpEngine.current!.start(v);
         } else {
             console.error('No callback yet');
         }
 
-    }, [glueCallback]);
+    }, [dewarpEngine]);
 
 
     return (
         <div style={{width: '100%', height: '100%'}}>
-            <DewarpComponent ref={glueCallback} lensProfile={lensProfile}>
+            <DewarpComponent ref={dewarpEngine} lensProfile={lensProfile}>
                 <VideoComponent onPlaybackStarted={processFrame}/>
             </DewarpComponent>)
         </div>

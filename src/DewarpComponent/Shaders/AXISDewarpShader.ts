@@ -80,7 +80,8 @@ vec2 CalcRotate(float theta, float lambda)
 void main(void)
 {
   vec2 sep = (uv - 0.5) * video_size.x;
-
+  sep.y = 1.0-sep.y;
+   
   // The theta and lambda of a ray passing from the eye through the near plane
   float theta = CalcTheta(sep);
   float lambda = lambdaOffset - atan(sep.y, -sep.x);
