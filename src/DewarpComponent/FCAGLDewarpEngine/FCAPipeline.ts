@@ -8,7 +8,7 @@ const TUNING_CONSTANTS = {
     textureFiltering: true
 };
 
-let DOWNSCALE_FACTOR = 2.0;
+let DOWNSCALE_FACTOR = 4.0;
 const BUFFER_SIZE = 4096 / DOWNSCALE_FACTOR;
 
 export type FCAGLTextureObject = {
@@ -64,6 +64,14 @@ export const createVAO = (gl: WebGL2RenderingContext, bindings: FCAGLBindingMap,
         0, 0,
         0, 1];
 
+    const normals = [
+        0, 0, 1,
+        0, 0, 1,
+        0, 0, 1,
+        0, 0, 1,
+        0, 0, 1,
+        0, 0, 1,
+    ];
 
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(screenQuad), gl.STATIC_DRAW);
 
@@ -109,13 +117,21 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
         precision highp float;
          
         in vec2 v_texcoord;
+        in vec3 v_normal;
         uniform sampler2D u_texture;
         out vec4 color;
          
         void main() {
            vec2 tex = v_texcoord;
-           tex.y = 1.0 - tex.y;
-           color = texture(u_texture,tex);   
+           tex.y = 1. - tex.y;
+           
+           vec2 atf = 1. -smoothstep(vec2(.7), vec2(1.), sqrt(abs(2.*tex-1.)));
+           float factor = atf.x * atf.y;
+           vec4 tint = vec4(.2,.4,.5,1.0);
+           vec4 t = texture(u_texture,tex);
+          
+           color = vec4((t.rgb * factor) + (tint.rgb * (factor - 1.)) , 1.0);   
+           
         }`
     });
     const vaoObj = createVAO(gl, AXISDewarp.bindings, true);
@@ -285,7 +301,8 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
                 const model = mat4.create();
                 mat4.identity(model);
                 mat4.translate(model, model, [0, 0, -.2]);
-                // mat4.rotateX(model, model, frameCounter*.1 * Math.PI / 180)
+
+              //  mat4.rotateX(model, model, -frameCounter*.1 * Math.PI / 180)
                 // mat4.rotateY(model, model, frameCounter*.1 * Math.PI / 180)
                 gl.uniformMatrix4fv(uniform.u_model.address, false, model);
             }, null);

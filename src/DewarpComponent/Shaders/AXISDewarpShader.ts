@@ -45,12 +45,10 @@ vec2 CartesianToSpherical(vec3 cartesian)
     atan(cartesian.y, cartesian.x)
   );
 }
-
 vec2 CalcRotate(float theta, float lambda)
 {
   vec3 cart = SphericalToCartesian(theta, lambda);
   vec2 abscos = abs(cos(rotateData.xy));
-
   // rotate around x-axis
   if (rotateData.x != 0.0)
   {
@@ -59,7 +57,6 @@ vec2 CalcRotate(float theta, float lambda)
       cart.z * abscos.x - cart.y * sin(rotateData.x)
     );
   }
-
   // rotate around y-axis
   if (rotateData.y != 0.0)
   {
@@ -68,12 +65,9 @@ vec2 CalcRotate(float theta, float lambda)
       cart.z * abscos.y - cart.x * sin(rotateData.y)
     );
   }
-
   vec2 spherical = CartesianToSpherical(cart);
-
   // rotate around z axis
   spherical.y += rotateData.z;
-
   return spherical;
 }
 
@@ -115,6 +109,7 @@ out vec2 uv;
 uniform mat4 u_projection;
 uniform mat4 u_view;
 uniform mat4 u_model;
+uniform vec2 video_size;            /// native resolution, x is width, y is height
 
 void main() {
   uv = a_texcoord;
