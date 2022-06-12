@@ -3,9 +3,9 @@ precision highp float;
 const float PI = 3.1415926535897932384626433832795;
 
 uniform sampler2D u_texture;
-uniform vec2 video_size;                       /// native resolution, x is width, y is height
+uniform vec2 video_size;            /// native resolution, x is width, y is height
 uniform float tangentOfFieldOfView; /// The desired field of view (zoom level)
-float lambdaOffset = PI/2.0;        /// Offset for the lambda value
+float lambdaOffset = -PI/2.0;        /// Offset for the lambda value
 uniform vec3 rotateData;            /// Data used for rotating the image depending on pan, tilt and placement
 uniform vec4 LensProfile;           /// The profile for the current lens
 
@@ -80,7 +80,7 @@ vec2 CalcRotate(float theta, float lambda)
 void main(void)
 {
   vec2 sep = (uv - 0.5) * video_size.x;
-  sep.y = 1.0-sep.y;
+  //sep.y = 1.0-sep.y;
    
   // The theta and lambda of a ray passing from the eye through the near plane
   float theta = CalcTheta(sep);

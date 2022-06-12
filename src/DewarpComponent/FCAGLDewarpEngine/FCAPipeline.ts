@@ -8,8 +8,8 @@ const TUNING_CONSTANTS = {
     textureFiltering: true
 };
 
-let DOWNSCALE_FACTOR = 1.0;
-const BUFFER_SIZE = 2048 / DOWNSCALE_FACTOR;
+let DOWNSCALE_FACTOR = 2.0;
+const BUFFER_SIZE = 4096 / DOWNSCALE_FACTOR;
 
 export type FCAGLTextureObject = {
     tex: WebGLTexture | null;
@@ -91,7 +91,7 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
         when we render to FBOs this means the output will be flipped.
         This shader flips it back.
      */
-    const TextureFlipShader = compiler.compileProgram({
+    const ProjectionShader = compiler.compileProgram({
         fragmentShader: `#version 300 es
         precision highp float;
          
@@ -106,7 +106,7 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
         }`
     });
     const vaoObj = createVAO(gl, AXISDewarp.bindings, true);
-    const solid = createVAO(gl, TextureFlipShader.bindings, false);
+    const solid = createVAO(gl, ProjectionShader.bindings, false);
 
     let frameCounter = 0;
 
@@ -189,64 +189,69 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
         rotationAngle += (Math.PI / 180.0);
         if (frameSource) {
             updateFramebufferSize();
-            downsample!.drawImage(frameSource!, 0, 0, downsampleCtx.width, downsampleCtx.height);
 
-            // The render loop runs at screen refresh speed
-            // this means we likely refresh at least 60 times a second
+
+
+            // The render loop runs at screen refresh speed, this means we likely refresh at least 60 times a second
             // the camera stream is unlikely to have an fps higher than 30
             // so we sample every other frame (30 fps effective speed)
+            // As we use FBOs we also can skip processing the dewarp algorithm and CAS until next sample.
             if ((frameCounter & 0x1) === 0) {
                 capturedFrames++;
                 sampleVideoFrame(downsampleCtx);
+                downsample!.drawImage(frameSource!, 0, 0, downsampleCtx.width, downsampleCtx.height);
+                drawVAO(vaoObj, AXISDewarp, (gl, uniform) => {
+                    gl.activeTexture(gl.TEXTURE0);
+                    gl.bindTexture(gl.TEXTURE_2D, frameTexture.tex);
+                    gl.uniform1i(uniform.u_texture.address, 0);
+
+                    gl.uniform3fv(uniform.rotateData.address, uniformBuffer.rotation);
+                    gl.uniform1f(uniform.tangentOfFieldOfView.address, uniformBuffer.FOV);
+
+                    gl.uniform4fv(uniform.LensProfile.address, opticProfile);
+                    gl.uniform2fv(uniform.video_size.address, [downsampleCtx.width, downsampleCtx.height]);
+
+                    const projection = mat4.create();
+                    mat4.identity(projection);
+                    mat4.ortho(projection, 0, BUFFER_SIZE, BUFFER_SIZE, 0, -1, 1);
+                    mat4.scale(projection, projection, [downsampleCtx.width, downsampleCtx.height, 1]);
+                    mat4.translate(projection, projection, [.5, .5, 0]);
+                    gl.uniformMatrix4fv(uniform.u_projection.address, false, projection);
+                    const view = mat4.create();
+                    mat4.identity(view);
+                    gl.uniformMatrix4fv(uniform.u_view.address, false, view);
+
+                    const model = mat4.create();
+                    mat4.identity(model);
+                    mat4.scale(model, model, [1, -1, 1]);
+
+                    gl.uniformMatrix4fv(uniform.u_model.address, false, model);
+                }, dewarpFBO);
+
+                drawVAO(vaoObj, AMDFidelityCAS, (gl, uniform) => {
+                    gl.activeTexture(gl.TEXTURE2);
+                    gl.uniform1i(uniform.u_texture.address, 2);
+                    gl.bindTexture(gl.TEXTURE_2D, dewarpFBO.texObject.tex);
+
+                    const projection = mat4.create();
+                    mat4.identity(projection);
+                    gl.uniformMatrix4fv(uniform.u_projection.address, false, projection);
+                    const view = mat4.create();
+                    mat4.identity(view);
+                    gl.uniformMatrix4fv(uniform.u_view.address, false, view);
+
+                    const model = mat4.create();
+                    mat4.identity(model);
+                    gl.uniformMatrix4fv(uniform.u_model.address, false, model);
+
+                }, postProcessFBO);
+
+                if (capturedFrames % 60 === 0) {
+                    console.log('Capture fps:', 60 * capturedFrames / frameCounter);
+                }
             }
 
-            drawVAO(vaoObj, AXISDewarp, (gl, uniform) => {
-                gl.activeTexture(gl.TEXTURE0);
-                gl.bindTexture(gl.TEXTURE_2D, frameTexture.tex);
-                gl.uniform1i(uniform.u_texture.address, 0);
-
-                gl.uniform3fv(uniform.rotateData.address, uniformBuffer.rotation);
-                gl.uniform1f(uniform.tangentOfFieldOfView.address, uniformBuffer.FOV);
-
-                gl.uniform4fv(uniform.LensProfile.address, opticProfile);
-                gl.uniform2fv(uniform.video_size.address, [downsampleCtx.width, downsampleCtx.height]);
-
-                const projection = mat4.create();
-                mat4.identity(projection);
-                mat4.ortho(projection, 0, BUFFER_SIZE, BUFFER_SIZE, 0, -1, 1);
-                mat4.scale(projection, projection, [downsampleCtx.width, downsampleCtx.height, 1]);
-                mat4.translate(projection, projection, [.5, .5, 0]);
-                gl.uniformMatrix4fv(uniform.u_projection.address, false, projection);
-                const view = mat4.create();
-                mat4.identity(view);
-                gl.uniformMatrix4fv(uniform.u_view.address, false, view);
-
-                const model = mat4.create();
-                mat4.identity(model);
-                mat4.scale(model, model, [1, -1, 1]);
-
-                gl.uniformMatrix4fv(uniform.u_model.address, false, model);
-            }, dewarpFBO);
-
-            drawVAO(vaoObj, AMDFidelityCAS, (gl, uniform) => {
-                gl.activeTexture(gl.TEXTURE2);
-                gl.uniform1i(uniform.u_texture.address, 2);
-                gl.bindTexture(gl.TEXTURE_2D, dewarpFBO.texObject.tex);
-
-                const projection = mat4.create();
-                mat4.identity(projection);
-                gl.uniformMatrix4fv(uniform.u_projection.address, false, projection);
-                const view = mat4.create();
-                mat4.identity(view);
-                gl.uniformMatrix4fv(uniform.u_view.address, false, view);
-
-                const model = mat4.create();
-                mat4.identity(model);
-                gl.uniformMatrix4fv(uniform.u_model.address, false, model);
-
-            }, postProcessFBO);
-
-            drawVAO(solid, TextureFlipShader, (gl, uniform) => {
+            drawVAO(solid, ProjectionShader, (gl, uniform) => {
                 gl.activeTexture(gl.TEXTURE3);
                 gl.bindTexture(gl.TEXTURE_2D, postProcessFBO.texObject.tex);
                 gl.uniform1i(uniform.u_texture.address, 3);
@@ -262,13 +267,11 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
 
                 const model = mat4.create();
                 mat4.identity(model);
-                //mat4.rotateX(model, model, frameCounter * Math.PI / 180)
+                mat4.translate(model,model,[0,0,-.2]);
+               // mat4.rotateX(model, model, frameCounter*.1 * Math.PI / 180)
+               // mat4.rotateY(model, model, frameCounter*.1 * Math.PI / 180)
                 gl.uniformMatrix4fv(uniform.u_model.address, false, model);
             }, null);
-
-            if (capturedFrames % 60 === 0) {
-                console.log('Capture fps:', 60 * capturedFrames / frameCounter);
-            }
 
             requestAnimationFrame(() => {
                 updateRender()
