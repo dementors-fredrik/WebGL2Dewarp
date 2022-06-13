@@ -2946,7 +2946,7 @@ void main() {
     vec2 textureRes = vec2(textureSize(u_texture, 0));
     uvec2 point = uvec2(vec2(v_texcoord) * textureRes);
     
-    float sharpnessTuning = 0.0f;
+    float sharpnessTuning = 0.2f;
     uvec4 const0;
     uvec4 const1;
     

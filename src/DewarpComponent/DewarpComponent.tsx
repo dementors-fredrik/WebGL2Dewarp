@@ -61,24 +61,67 @@ export const DewarpComponent: React.FC<React.PropsWithChildren<any>> =
                 console.info('Setting up rendering pipeline');
                 const canvas = canvasRef.current;
                 const container = containerRef.current;
+                let sampleMouse = false;
+                let dx = 0, dy = 0;
+                let targetFov = uniformBuffer.FOV;
+                let zooming = false;
 
-                container.onwheel = (ev) => {
-                    if(ev.deltaY>0) {
-                        if(uniformBuffer.FOV>2*Math.PI/180.0) {
-                            uniformBuffer.FOV-=Math.PI/180.0;
+                const updateFov = () => {
+                    if(Math.abs(toDeg(targetFov)-toDeg(uniformBuffer.FOV)) > 1) {
+                        zooming=true;
+                        if(targetFov>uniformBuffer.FOV) {
+                            uniformBuffer.FOV+=(Math.PI/180.0)/3.;
+                        }else {
+                            uniformBuffer.FOV-=(Math.PI/180.0)/3.;
                         }
+                        requestAnimationFrame(updateFov);
                     } else {
-                        if(uniformBuffer.FOV < 720*Math.PI/180.0) {
-                            uniformBuffer.FOV+=Math.PI/180.0;
-                        }
+                        targetFov=uniformBuffer.FOV;
+                        zooming=false;
                     }
-                    ev.preventDefault();
                 }
 
-                let sampleMouse = false;
+                container.onwheel = (ev) => {
+                    ev.preventDefault();
+
+                    if(ev.deltaY>0) {
+                        if(targetFov>2*Math.PI/180.0) {
+                            targetFov-=(Math.PI/180.0*5)/Math.abs(ev.deltaY);
+                        }
+                    } else if(ev.deltaY<0) {
+                        if (targetFov < 720 * Math.PI / 180.0) {
+                            targetFov += (Math.PI / 180.0 * 5) / Math.abs(ev.deltaY);
+                        }
+                    } else {
+                        return;
+                    }
+                    if(!zooming){
+                        zooming=true;
+                        requestAnimationFrame(updateFov);
+                    }
+                }
+
+
+                const calcRotationSpeed = (ev: MouseEvent) => {
+                    const aspect = canvas.height/canvas.width;
+                    dx = -((canvas.width / 2) - ev.clientX)/(((canvas.width*aspect)/4)/uniformBuffer.FOV);
+                    dy = -((canvas.height/ 2) - ev.clientY)/((canvas.height/4)/uniformBuffer.FOV);
+                    return { cDx: dx, cDy: dy};
+                }
                 container.onmousedown = (ev) => {
                     ev.preventDefault();
                     sampleMouse = true;
+                    const {cDx, cDy} = calcRotationSpeed(ev);
+                    dx = cDx;
+                    dy = cDy;
+                    const updatePtz = () => {
+                        const c = uniformBuffer.rotation;
+                        uniformBuffer.rotation = [toRad(dx)+c[0], toRad(dy)+c[1],c[2]];
+                        if(sampleMouse) {
+                            requestAnimationFrame(updatePtz);
+                        }
+                    }
+                    requestAnimationFrame(updatePtz);
                 }
 
                 container.onmouseup = (ev) => {
@@ -90,13 +133,17 @@ export const DewarpComponent: React.FC<React.PropsWithChildren<any>> =
                     sampleMouse = false;
                     ev.preventDefault();
                 }
+
                 container.onmousemove = (ev) => {
                     ev.preventDefault();
                     if (sampleMouse) {
-                        const c = uniformBuffer.rotation;
-                        uniformBuffer.rotation = [toRad(ev.movementX/10.0)+c[0], toRad(ev.movementY/10.0)+c[1],c[2]];
+                        const {cDx, cDy} = calcRotationSpeed(ev);
+                        dx = cDx;
+                        dy = cDy;
                     }
                 }
+
+
 
                 const glContext = canvas.getContext("webgl2");
 

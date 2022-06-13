@@ -5,11 +5,11 @@ import {mat4, glMatrix} from "gl-matrix";
 
 const TUNING_CONSTANTS = {
     workaroundSlowTexSubImage: false,
-    textureFiltering: true
+    textureFiltering: false
 };
 
-let DOWNSCALE_FACTOR = 2.0;
-const BUFFER_SIZE = 4096 / DOWNSCALE_FACTOR;
+let DOWNSCALE_FACTOR = 1.0;
+const BUFFER_SIZE = 2048 / DOWNSCALE_FACTOR;
 
 export type FCAGLTextureObject = {
     tex: WebGLTexture | null;
@@ -24,31 +24,12 @@ export type FCAGLPipeline = {
     shutdown: () => void;
 };
 
-export const createVAO = (gl: WebGL2RenderingContext, bindings: FCAGLBindingMap, forFBO: boolean) => {
+export const createPlaneVAO = (gl: WebGL2RenderingContext, bindings: FCAGLBindingMap, forFBO: boolean) => {
     const vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
 
     const vaoBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, vaoBuffer);
-
-    /*const screenQuad = [
-        -1.0, -1.0,  0.0,
-        1.0, -1.0,  0.0,
-        1.0,  1.0,  0.0,
-        -1.0, -1.0,  0.0,
-        1.0,  1.0,  0.0,
-        -1.0,  1.0,  0.0
-    ];
-
-    const texQuad = [
-        0.0,  0.0,
-        1.0,  0.0,
-        1.0,  1.0,
-        0.0,  0.0,
-        1.0,  1.0,
-        0.0,  1.0,
-    ];
-    */
 
     const screenQuad = [1, -1, 0,
         -1, 1, 0,
@@ -118,8 +99,8 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
            color = texture(u_texture,tex);   
         }`
     });
-    const vaoObj = createVAO(gl, AXISDewarp.bindings, true);
-    const solid = createVAO(gl, ProjectionShader.bindings, false);
+    const vaoObj = createPlaneVAO(gl, AXISDewarp.bindings, true);
+    const solid = createPlaneVAO(gl, ProjectionShader.bindings, false);
 
     let frameCounter = 0;
 
@@ -162,14 +143,14 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
         return {fbo: fb!, texObject: textureObject};
     };
 
-    const downsampleCtx = document.createElement('canvas');
-    const downsample = downsampleCtx.getContext("2d");
-    downsampleCtx.width = BUFFER_SIZE;
-    downsampleCtx.height = BUFFER_SIZE;
+    const downsample = document.createElement('canvas');
+    const downsampleCtx = downsample.getContext("2d");
+    downsample.width = BUFFER_SIZE;
+    downsample.height = BUFFER_SIZE;
 
-    const frameTexture = createTexture(downsampleCtx.width, downsampleCtx.height);
-    const dewarpFBO = createFBO(downsampleCtx.width, downsampleCtx.height);
-    const postProcessFBO = createFBO(downsampleCtx.width, downsampleCtx.height);
+    const frameTexture = createTexture(downsample.width, downsample.height);
+    const dewarpFBO = createFBO(downsample.width, downsample.height);
+    const postProcessFBO = createFBO(downsample.width, downsample.height);
 
     const sampleVideoFrame = (v: HTMLVideoElement | HTMLCanvasElement) => {
         let offsetX = 0;
@@ -178,10 +159,10 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
         gl.bindTexture(gl.TEXTURE_2D, frameTexture.tex);
 
         if (TUNING_CONSTANTS.workaroundSlowTexSubImage) {
-            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, v.width, v.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, v);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, downsample.width, downsample.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, downsample);
         } else {
             gl.texSubImage2D(gl.TEXTURE_2D, 0, offsetX, offsetY,
-                frameTexture.width - offsetX, frameTexture.height - offsetY, gl.RGBA, gl.UNSIGNED_BYTE, v);
+                frameTexture.width - offsetX, frameTexture.height - offsetY, gl.RGBA, gl.UNSIGNED_BYTE, downsample);
         }
     }
 
@@ -194,24 +175,20 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
         gl.canvas.height = h;
     }
 
-    let temp = 2000;
     let capturedFrames = 0;
     const updateRender = () => {
         frameCounter++;
-        temp += 10;
         rotationAngle += (Math.PI / 180.0);
         if (frameSource) {
             updateFramebufferSize();
 
-
             // The render loop runs at screen refresh speed, this means we likely refresh at least 60 times a second
             // the camera stream is unlikely to have an fps higher than 30
             // so we sample every other frame (30 fps effective speed)
-            // As we use FBOs we also can skip processing the dewarp algorithm and CAS until next sample.
             if ((frameCounter & 0x1) === 0) {
                 capturedFrames++;
-                sampleVideoFrame(downsampleCtx);
-                downsample!.drawImage(frameSource!, 0, 0, downsampleCtx.width, downsampleCtx.height);
+                downsampleCtx!.drawImage(frameSource!, downsample.width / 4, downsample.height / 4, downsample.width / 2, downsample.height / 2);
+                sampleVideoFrame(downsample);
                 drawVAO(vaoObj, AXISDewarp, (gl, uniform) => {
                     gl.activeTexture(gl.TEXTURE0);
                     gl.bindTexture(gl.TEXTURE_2D, frameTexture.tex);
@@ -222,13 +199,13 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
                     gl.uniform1f(uniform.tangentOfFieldOfView.address, uniformBuffer.FOV);
 
                     gl.uniform4fv(uniform.LensProfile.address, opticProfile);
-                    gl.uniform2fv(uniform.video_size.address, [downsampleCtx.width, downsampleCtx.height]);
+                    gl.uniform2fv(uniform.video_size.address, [downsample.width, downsample.height]);
 
                     const projection = mat4.create();
                     mat4.identity(projection);
                     //mat4.ortho(projection, 0, 1, 1, 0, -1, 1);
-                    mat4.ortho(projection, -downsampleCtx.width / 2, downsampleCtx.width / 2, downsampleCtx.height / 2, -downsampleCtx.height / 2, -1, 1);
-                    mat4.scale(projection, projection, [downsampleCtx.width / 2, downsampleCtx.height / 2, 1]);
+                    mat4.ortho(projection, -downsample.width / 2, downsample.width / 2, downsample.height / 2, -downsample.height / 2, -1, 1);
+                    mat4.scale(projection, projection, [downsample.width / 2, downsample.height / 2, 1]);
                     mat4.scale(projection, projection, [1, -1, 1]);
 
                     gl.uniformMatrix4fv(uniform.u_projection.address, false, projection);
@@ -244,33 +221,10 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
                     gl.uniformMatrix4fv(uniform.u_model.address, false, model);
 
                 }, dewarpFBO);
-
-                drawVAO(vaoObj, AMDFidelityCAS, (gl, uniform) => {
-                    gl.activeTexture(gl.TEXTURE2);
-                    gl.uniform1i(uniform.u_texture.address, 2);
-                    gl.bindTexture(gl.TEXTURE_2D, dewarpFBO.texObject.tex);
-
-                    const projection = mat4.create();
-                    mat4.identity(projection);
-                    gl.uniformMatrix4fv(uniform.u_projection.address, false, projection);
-                    const view = mat4.create();
-                    mat4.identity(view);
-                    gl.uniformMatrix4fv(uniform.u_view.address, false, view);
-
-                    const model = mat4.create();
-                    mat4.identity(model);
-                    gl.uniformMatrix4fv(uniform.u_model.address, false, model);
-
-                }, postProcessFBO);
-
-                if (capturedFrames % 60 === 0) {
-                    console.log('Capture fps:', 60 * capturedFrames / frameCounter);
-                }
             }
-
             drawVAO(solid, ProjectionShader, (gl, uniform) => {
                 gl.activeTexture(gl.TEXTURE3);
-                gl.bindTexture(gl.TEXTURE_2D, postProcessFBO.texObject.tex);
+                gl.bindTexture(gl.TEXTURE_2D, dewarpFBO.texObject.tex);
                 gl.uniform1i(uniform.u_texture.address, 3);
 
                 const projection = mat4.create();
@@ -288,7 +242,31 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
                 // mat4.rotateX(model, model, frameCounter*.1 * Math.PI / 180)
                 // mat4.rotateY(model, model, frameCounter*.1 * Math.PI / 180)
                 gl.uniformMatrix4fv(uniform.u_model.address, false, model);
+            }, postProcessFBO);
+
+
+            drawVAO(vaoObj, AMDFidelityCAS, (gl, uniform) => {
+                gl.activeTexture(gl.TEXTURE2);
+                gl.uniform1i(uniform.u_texture.address, 2);
+                gl.bindTexture(gl.TEXTURE_2D, postProcessFBO.texObject.tex);
+
+                const projection = mat4.create();
+                mat4.identity(projection);
+                gl.uniformMatrix4fv(uniform.u_projection.address, false, projection);
+                const view = mat4.create();
+                mat4.identity(view);
+                gl.uniformMatrix4fv(uniform.u_view.address, false, view);
+
+                const model = mat4.create();
+                mat4.identity(model);
+                gl.uniformMatrix4fv(uniform.u_model.address, false, model);
+
             }, null);
+
+            if (capturedFrames % 60 === 0) {
+                console.log('Capture fps:', 60 * capturedFrames / frameCounter);
+            }
+
 
             requestAnimationFrame(() => {
                 updateRender()
@@ -320,6 +298,9 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
             console.log('Terminating gl context');
             frameSource = null;
             gl.deleteTexture(frameTexture.tex!);
+            gl.deleteProgram(AXISDewarp.program);
+            gl.deleteProgram(AMDFidelityCAS.program);
+            gl.deleteProgram(ProjectionShader.program);
         }
     }
 }
