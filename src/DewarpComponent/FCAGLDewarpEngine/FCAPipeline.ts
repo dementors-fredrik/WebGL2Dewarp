@@ -5,7 +5,7 @@ import {mat4, glMatrix} from "gl-matrix";
 
 const TUNING_CONSTANTS = {
     workaroundSlowTexSubImage: false,
-    textureFiltering: false
+    textureFiltering: true
 };
 
 let DOWNSCALE_FACTOR = 1.0;
@@ -24,7 +24,7 @@ export type FCAGLPipeline = {
     shutdown: () => void;
 };
 
-export const createPlaneVAO = (gl: WebGL2RenderingContext, bindings: FCAGLBindingMap, forFBO: boolean) => {
+export const createPlaneVAO = (gl: WebGL2RenderingContext, bindings: FCAGLBindingMap) => {
     const vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
 
@@ -69,7 +69,6 @@ export const createPlaneVAO = (gl: WebGL2RenderingContext, bindings: FCAGLBindin
 let rotationAngle = 0.0;
 
 export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HTMLDivElement, opticProfile: Float32Array, uniformBuffer: { rotation: Array<number>, FOV: number }): FCAGLPipeline => {
-    let FOV = 1.4;//Math.tan(90 * Math.PI/180.0);
     glMatrix.setMatrixArrayType(Array);
     const compiler = shaderCompiler(gl);
     const AXISDewarp = compiler.compileProgram({
@@ -99,8 +98,8 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
            color = texture(u_texture,tex);   
         }`
     });
-    const vaoObj = createPlaneVAO(gl, AXISDewarp.bindings, true);
-    const solid = createPlaneVAO(gl, ProjectionShader.bindings, false);
+    const vaoObj = createPlaneVAO(gl, AXISDewarp.bindings);
+    const solid = createPlaneVAO(gl, ProjectionShader.bindings);
 
     let frameCounter = 0;
 
@@ -159,10 +158,10 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
         gl.bindTexture(gl.TEXTURE_2D, frameTexture.tex);
 
         if (TUNING_CONSTANTS.workaroundSlowTexSubImage) {
-            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, downsample.width, downsample.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, downsample);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, v.width, v.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, v);
         } else {
             gl.texSubImage2D(gl.TEXTURE_2D, 0, offsetX, offsetY,
-                frameTexture.width - offsetX, frameTexture.height - offsetY, gl.RGBA, gl.UNSIGNED_BYTE, downsample);
+                frameTexture.width - offsetX, frameTexture.height - offsetY, gl.RGBA, gl.UNSIGNED_BYTE, v);
         }
     }
 
@@ -175,53 +174,49 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
         gl.canvas.height = h;
     }
 
-    let capturedFrames = 0;
+    console.log('Creating new pipeline');
     const updateRender = () => {
-        frameCounter++;
-        rotationAngle += (Math.PI / 180.0);
         if (frameSource) {
+            requestAnimationFrame(() => {
+                updateRender()
+            });
+
             updateFramebufferSize();
 
-            // The render loop runs at screen refresh speed, this means we likely refresh at least 60 times a second
-            // the camera stream is unlikely to have an fps higher than 30
-            // so we sample every other frame (30 fps effective speed)
-            if ((frameCounter & 0x1) === 0) {
-                capturedFrames++;
-                downsampleCtx!.drawImage(frameSource!, downsample.width / 4, downsample.height / 4, downsample.width / 2, downsample.height / 2);
-                sampleVideoFrame(downsample);
-                drawVAO(vaoObj, AXISDewarp, (gl, uniform) => {
-                    gl.activeTexture(gl.TEXTURE0);
-                    gl.bindTexture(gl.TEXTURE_2D, frameTexture.tex);
-                    gl.uniform1i(uniform.u_texture.address, 0);
+            downsampleCtx!.drawImage(frameSource!, downsample.width / 4, downsample.height / 4, downsample.width / 2, downsample.height / 2);
+            sampleVideoFrame(downsample);
+            drawVAO(vaoObj, AXISDewarp, (gl, uniform) => {
+                gl.activeTexture(gl.TEXTURE0);
+                gl.bindTexture(gl.TEXTURE_2D, frameTexture.tex);
+                gl.uniform1i(uniform.u_texture.address, 0);
 
-                    const r = uniformBuffer.rotation;
-                    gl.uniform3fv(uniform.rotateData.address, [0, -(r[1] + Math.PI / 2), r[0] + Math.PI / 2]);
-                    gl.uniform1f(uniform.tangentOfFieldOfView.address, uniformBuffer.FOV);
+                const r = uniformBuffer.rotation;
+                gl.uniform3fv(uniform.rotateData.address, [0, -(r[1] + Math.PI / 2), r[0] + Math.PI / 2]);
+                gl.uniform1f(uniform.tangentOfFieldOfView.address, uniformBuffer.FOV);
 
-                    gl.uniform4fv(uniform.LensProfile.address, opticProfile);
-                    gl.uniform2fv(uniform.video_size.address, [downsample.width, downsample.height]);
+                gl.uniform4fv(uniform.LensProfile.address, opticProfile);
+                gl.uniform2fv(uniform.video_size.address, [frameSource!.videoWidth, frameSource!.videoHeight]);
 
-                    const projection = mat4.create();
-                    mat4.identity(projection);
-                    //mat4.ortho(projection, 0, 1, 1, 0, -1, 1);
-                    mat4.ortho(projection, -downsample.width / 2, downsample.width / 2, downsample.height / 2, -downsample.height / 2, -1, 1);
-                    mat4.scale(projection, projection, [downsample.width / 2, downsample.height / 2, 1]);
-                    mat4.scale(projection, projection, [1, -1, 1]);
+                const projection = mat4.create();
+                mat4.identity(projection);
+                //mat4.ortho(projection, 0, 1, 1, 0, -1, 1);
+                mat4.ortho(projection, -downsample.width / 2, downsample.width / 2, downsample.height / 2, -downsample.height / 2, -1, 1);
+                mat4.scale(projection, projection, [downsample.width / 2, downsample.height / 2, 1]);
+                mat4.scale(projection, projection, [1, -1, 1]);
 
-                    gl.uniformMatrix4fv(uniform.u_projection.address, false, projection);
-                    const view = mat4.create();
-                    mat4.identity(view);
-                    gl.uniformMatrix4fv(uniform.u_view.address, false, view);
+                gl.uniformMatrix4fv(uniform.u_projection.address, false, projection);
+                const view = mat4.create();
+                mat4.identity(view);
+                gl.uniformMatrix4fv(uniform.u_view.address, false, view);
 
-                    const model = mat4.create();
-                    mat4.identity(model);
-                    //   mat4.scale(model,model,[.5,.5,1]);
-                    //mat4.scale(model, model, [1, -1, 1]);
+                const model = mat4.create();
+                mat4.identity(model);
+                //   mat4.scale(model,model,[.5,.5,1]);
+                //mat4.scale(model, model, [1, -1, 1]);
 
-                    gl.uniformMatrix4fv(uniform.u_model.address, false, model);
+                gl.uniformMatrix4fv(uniform.u_model.address, false, model);
 
-                }, dewarpFBO);
-            }
+            }, dewarpFBO);
             drawVAO(solid, ProjectionShader, (gl, uniform) => {
                 gl.activeTexture(gl.TEXTURE3);
                 gl.bindTexture(gl.TEXTURE_2D, dewarpFBO.texObject.tex);
@@ -238,7 +233,7 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
 
                 const model = mat4.create();
                 mat4.identity(model);
-                mat4.translate(model, model, [0, 0, -.2]);
+                mat4.translate(model, model, [0, 0, -.5]);
                 // mat4.rotateX(model, model, frameCounter*.1 * Math.PI / 180)
                 // mat4.rotateY(model, model, frameCounter*.1 * Math.PI / 180)
                 gl.uniformMatrix4fv(uniform.u_model.address, false, model);
@@ -263,14 +258,6 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
 
             }, null);
 
-            if (capturedFrames % 60 === 0) {
-                console.log('Capture fps:', 60 * capturedFrames / frameCounter);
-            }
-
-
-            requestAnimationFrame(() => {
-                updateRender()
-            });
         } else {
             console.log('No frameSource');
         }
@@ -282,11 +269,13 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
                 console.log('Starting dewarp');
                 frameSource = frame;
                 updateRender();
+            } else {
+                console.log('Already started');
             }
         },
 
         setFOV: (fov: number) => {
-            FOV = Math.tan(fov);
+            uniformBuffer.FOV = Math.tan(fov);
         },
 
         stop: () => {
