@@ -1,11 +1,20 @@
-import React, {useEffect, useImperativeHandle, useMemo, useRef, useState} from "react";
+import React, {
+    MutableRefObject,
+    Ref,
+    RefObject,
+    useEffect,
+    useImperativeHandle,
+    useMemo,
+    useRef,
+    useState
+} from "react";
 
 import {FCAGLConfigurePipeline} from "./FCAGLDewarpEngine/FCAPipeline";
 
 export const toRad = (deg: number) => deg * Math.PI / 180.0;
 export const toDeg = (rad: number) => rad / Math.PI * 180.0;
 
-export type DewarpComponentHandle = {
+export type VirtualPtzHandle = {
     start: (v: HTMLVideoElement) => void;
     stop: () => void;
     setPtz: (ptz : Array<number>) => void;
@@ -17,8 +26,8 @@ const uniformBuffer = {
     FOV: Math.PI/2
 };
 
-export const DewarpComponent: React.FC<React.PropsWithChildren<any>> =
-    React.forwardRef(({children, lensProfile}, ref) => {
+export const VirtualPtzComponent: React.FC<React.PropsWithChildren<{ ref: Ref<VirtualPtzHandle>, videoElement: RefObject<HTMLVideoElement>, lensProfile?: Array<number>, performDewarp?: boolean }>> =
+    React.forwardRef(({children, lensProfile, performDewarp, videoElement}, ref) => {
         const [opticProfile, setOpticProfile] = useState<Float32Array>(new Float32Array([0, 0, 0, 0]));
         const containerRef = useRef<HTMLDivElement>(null);
         const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -103,6 +112,7 @@ export const DewarpComponent: React.FC<React.PropsWithChildren<any>> =
                     dy = -((canvas.height/ 2) - ev.clientY)/((canvas.height/4)/uniformBuffer.FOV);
                     return { cDx: dx, cDy: dy};
                 }
+
                 container.onmousedown = (ev) => {
                     ev.preventDefault();
                     sampleMouse = true;
@@ -147,25 +157,41 @@ export const DewarpComponent: React.FC<React.PropsWithChildren<any>> =
 
                 return FCAGLConfigurePipeline(glContext, container, opticProfile, uniformBuffer);
             }
-
         }, [canvasRef, containerRef, opticProfile]);
 
-        useImperativeHandle(ref, () => ({
-            start: (video: HTMLVideoElement) => {
-                console.log('starting dewarp!');
-                if (glPipe) {
-                    const c = uniformBuffer.rotation;
-                    uniformBuffer.rotation = [c[0], c[1], c[2]];
-                    glPipe.start(video);
-                } else {
-                    console.error('glpipeline is not ready yet!');
+        useEffect(() => {
+            console.log('Trying to bootstrap', glPipe, videoElement.current);
+
+            if(glPipe && videoElement.current) {
+                console.log('Bootstrap glPipe');
+                const c = uniformBuffer.rotation;
+                uniformBuffer.rotation = [c[0], c[1], c[2]];
+                //Starta
+                glPipe.start(videoElement.current);
+                return () => {
+                    console.log('Shutting down glPipe');
+                    glPipe!.shutdown()
                 }
+            }
+        }, [glPipe, videoElement])
+
+        useEffect(() => {
+            if(glPipe && performDewarp !== undefined) {
+                console.log('Dewarp is now ', performDewarp);
+                glPipe.setDewarpEnabled(performDewarp);
+            }
+        },[glPipe, performDewarp]);
+
+        useImperativeHandle(ref, () => ({
+            start: () => {
+
             },
             stop: () => {
                 glPipe!.stop();
             },
-            setPtz: (rotationVector: Array<number>) => {
-                uniformBuffer.rotation = rotationVector;
+            setPtz: (ptzParams: Array<number>) => {
+                uniformBuffer.rotation = [ptzParams[0], ptzParams[1]];
+              //  glPipe!.setFOV(ptzParams[2]);
             },
             setFOV: (fov: number) => {
                 glPipe!.setFOV(fov);

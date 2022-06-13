@@ -1,45 +1,29 @@
-import React, {useCallback, useEffect, useRef} from 'react';
-import {DewarpComponent, DewarpComponentHandle} from "./DewarpComponent/DewarpComponent";
+import React, {useCallback, useEffect, useImperativeHandle, useRef, useState} from 'react';
 import videoSrc from './assets/video.mp4';
-//import {} from "./DewarpComponent/FCAGLDewarpEngine/FCAPipeline";
+import {VirtualPtzHandle, VirtualPtzComponent} from './DewarpComponent/VirtualPtzComponent';
 
-
-const VideoComponent: React.FC<{ onPlaybackStarted: any }> = ({onPlaybackStarted}) => {
-    const videoEl = useRef<HTMLVideoElement>(null);
-    useEffect(() => {
-        if (videoEl.current) {
-            const vi = videoEl.current as HTMLVideoElement;
-            vi.onplaying = () => {
-                onPlaybackStarted(vi);
-            }
-        }
-    }, [onPlaybackStarted, videoEl]);
-
-    return (<video ref={videoEl} loop autoPlay={true} muted={true} src={videoSrc} width={'100%'}
-                   height={'100%'}></video>);
-}
 
 function App() {
-    const dewarpEngine = useRef<DewarpComponentHandle>(null);
-
+    const virtualPtz = useRef<VirtualPtzHandle>(null);
+    const videoTag = useRef<HTMLVideoElement>(null);
+    const [dewarping, setDewarping] = useState(false);
     const lensProfile = [113.889694,-60.882477,751.488831];
-    const ptzSetting = {x: 4.109286700809463, y: -0.9885839816668688, fov: 0.8351400470792861};
+    const ptzSetting = [4.109286700809463, -0.9885839816668688, 0.8351400470792861];
 
-    const processFrame = useCallback((v: HTMLVideoElement) => {
-        if (dewarpEngine.current) {
-            dewarpEngine.current!.start(v);
-        } else {
-            console.error('No callback yet');
+    /*
+    useEffect(() => {
+        if(virtualPtz.current) {
+            virtualPtz.current.setPtz(ptzSetting);
         }
-
-    }, [dewarpEngine]);
-
+    },[ptzSetting, virtualPtz]);*/
 
     return (
         <div style={{width: '100%', height: '100%'}}>
-            <DewarpComponent ref={dewarpEngine} lensProfile={lensProfile}>
-                <VideoComponent onPlaybackStarted={processFrame}/>
-            </DewarpComponent>)
+            <button onClick={() => setDewarping(!dewarping)}>{dewarping ? 'Disable dewarp' : 'Enable dewarp'}</button>
+            <VirtualPtzComponent ref={virtualPtz} videoElement={videoTag} lensProfile={lensProfile} performDewarp={dewarping}>
+                <video ref={videoTag} loop autoPlay={true} muted={true} src={videoSrc} width={'100%'}
+                       height={'100%'}></video>
+            </VirtualPtzComponent>)
         </div>
     );
 }
