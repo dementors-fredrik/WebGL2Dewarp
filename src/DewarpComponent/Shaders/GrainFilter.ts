@@ -13,7 +13,7 @@ float noise(vec2 co){
 void main(){
     vec2 uv = v_texcoord;
     vec4 incolor = texture(u_texture, uv.xy);
-    float offset = float(u_frame_counter)/15.;
-    color = vec4(mix(incolor.rgb,vec3(noise(vec2(uv.x+offset, uv.y-offset))),0.1),1.0);
+    float offset = float(u_frame_counter)/7.;
+    color = vec4(mix(incolor.rgb,vec3(noise(vec2(uv.x+cos(offset), uv.y-sin(offset)))),0.08),1.0);
 }
 `;
