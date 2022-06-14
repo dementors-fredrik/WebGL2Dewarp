@@ -51,10 +51,23 @@ export const VirtualPtzComponent: React.FC<React.PropsWithChildren<{ ref: Ref<Vi
                 let targetFov = uniformBuffer.FOV;
 
                 const updateFov = () => {
-                    if(targetFov===uniformBuffer.FOV) {
-                        return;
+                    const delta = wheelEvents.reduce((acc, ev) => {
+                        return acc + ev.deltaY;
+                    }, 0) * 0.001;
+
+                    if(delta>0) {
+                        targetFov= toRad(toDeg(uniformBuffer.FOV)/1.4);
+                        if(targetFov<2*Math.PI/180.0) {
+                            targetFov=2*Math.PI/180.0;
+                        }
+                    } else if(delta<0) {
+                        targetFov = toRad(toDeg(uniformBuffer.FOV)*1.3);
+                        if(targetFov>90*Math.PI/180.0) {
+                            targetFov=90*Math.PI/180.0;
+                        }
                     }
-                    const step = (Math.PI / 180.0) * 0.5 * uniformBuffer.FOV;
+                    wheelEvents = [];
+                    const step = Math.abs(targetFov-uniformBuffer.FOV)/100;
                     if (targetFov < uniformBuffer.FOV) {
                         if (uniformBuffer.FOV - step < 2 * Math.PI / 180.0) {
                             uniformBuffer.FOV = 2 * Math.PI / 180.0;
@@ -63,47 +76,31 @@ export const VirtualPtzComponent: React.FC<React.PropsWithChildren<{ ref: Ref<Vi
                             uniformBuffer.FOV -= step;
                         }
                     } else if (targetFov > uniformBuffer.FOV) {
-                        if (uniformBuffer.FOV + step > 720 * Math.PI / 180.0) {
-                            uniformBuffer.FOV = 720 * Math.PI / 180.0;
+                        if (uniformBuffer.FOV + step > 360 * Math.PI / 180.0) {
+                            uniformBuffer.FOV = 360 * Math.PI / 180.0;
                             targetFov = uniformBuffer.FOV;
                         } else {
                             uniformBuffer.FOV += step;
                         }
                     }
+
+                    if(Math.abs(toDeg(targetFov)-toDeg(uniformBuffer.FOV))*10.0 < 1)  {
+                        targetFov = uniformBuffer.FOV;
+                        return;
+                    }
+                   requestAnimationFrame(updateFov);
                 }
 
                 let wheelTimer : NodeJS.Timeout | number | null = null;
                 let wheelEvents : Array<any> = [];
                 container.onwheel = (ev) => {
                     ev.preventDefault();
-                    if(wheelTimer) {
-                        clearTimeout(wheelTimer);
-                        wheelTimer=null;
-                    } else {
-                        updateFov();
+                    if(!wheelEvents.length) {
+                        wheelEvents.push(ev);
+                        setTimeout(() => {
+                            requestAnimationFrame(updateFov);
+                        },20);
                     }
-                    wheelTimer=setTimeout(() => {
-                        wheelTimer=null;
-                        targetFov = uniformBuffer.FOV;
-                        const delta = wheelEvents.reduce((acc, ev) => {
-                            return acc + ev.deltaY;
-                        }, 0);
-                        if(delta>0) {
-                            targetFov-=(Math.PI/180.0)*delta*uniformBuffer.FOV*uniformBuffer.FOV;
-                            if(targetFov<2*Math.PI/180.0) {
-                                targetFov=2*Math.PI/180.0;
-                            }
-                        } else if(delta<0) {
-                            targetFov += (Math.PI / 180.0)*delta*uniformBuffer.FOV;
-                            if(targetFov<720*Math.PI/180.0) {
-                                targetFov=720*Math.PI/180.0;
-                            }
-                        }
-
-                        wheelEvents = [];
-                        updateFov();
-                    },1);
-                    wheelEvents.push(ev);
                 }
 
                 const calcRotationSpeed = (ev: MouseEvent) => {
