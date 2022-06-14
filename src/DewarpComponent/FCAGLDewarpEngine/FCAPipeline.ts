@@ -1,7 +1,10 @@
-import {FCAGLBindingMap, FCAGLProgramBundle, FCAGLUniformType, shaderCompiler} from "./FCAShaderCompiler";
+import {FCAGLBindingMap, shaderCompiler} from "./FCAShaderCompiler";
 import {AXISDewarpFragmentShaderWebGL2, AXISDewarpVertexShaderWebGL2} from "../Shaders/AXISDewarpShader";
 import {AMDFidelityFXCAS} from "../Shaders/AMDFidelityFXCAS";
-import {mat4, glMatrix} from "gl-matrix";
+import {glMatrix, mat4} from "gl-matrix";
+import {createPlaneVAO, drawVAO, FAGLFBOObject} from "./FCAWebGL2Toolkit";
+import {SobelFilter} from "../Shaders/SobelFilter";
+import {GrainFilter} from "../Shaders/GrainFilter";
 
 const TUNING_CONSTANTS = {
     workaroundSlowTexSubImage: false,
@@ -25,47 +28,6 @@ export type FCAGLPipeline = {
     setDewarpEnabled: (performDewarp: boolean) => void;
 };
 
-export const createPlaneVAO = (gl: WebGL2RenderingContext, bindings: FCAGLBindingMap) => {
-    const vao = gl.createVertexArray();
-    gl.bindVertexArray(vao);
-
-    const vaoBuffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, vaoBuffer);
-
-    const screenQuad = [1, -1, 0,
-        -1, 1, 0,
-        1, 1, 0,
-        1, -1, 0,
-        -1, -1, 0,
-        -1, 1, 0];
-
-    const texQuad = [1, 0,
-        0, 1,
-        1, 1,
-        1, 0,
-        0, 0,
-        0, 1];
-
-
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(screenQuad), gl.STATIC_DRAW);
-
-    if (bindings.in!.a_position) {
-        gl.enableVertexAttribArray(bindings.in!.a_position.address!);
-        gl.vertexAttribPointer(bindings.in!.a_position.address!, 3, gl.FLOAT, false, 0, 0);
-    }
-
-    const texBuffer = gl.createBuffer();
-    if (bindings!.in!.a_texcoord) {
-        gl.bindBuffer(gl.ARRAY_BUFFER, texBuffer);
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(texQuad), gl.STATIC_DRAW);
-
-        gl.enableVertexAttribArray(bindings!.in!.a_texcoord.address!);
-        gl.vertexAttribPointer(bindings!.in!.a_texcoord.address!, 2, gl.FLOAT, true, 0, 0);
-    } else {
-        gl.deleteBuffer(texBuffer);
-    }
-    return {vao: vao, vertices: screenQuad.length / 3, buffers: [vaoBuffer]};
-}
 
 export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HTMLDivElement, opticProfile: Float32Array, uniformBuffer: { rotation: Array<number>, FOV: number }): FCAGLPipeline => {
     glMatrix.setMatrixArrayType(Array);
@@ -79,6 +41,13 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
         fragmentShader: AMDFidelityFXCAS
     });
 
+    const Sobel = compiler.compileProgram({
+        fragmentShader: SobelFilter
+    })
+
+    const Grain = compiler.compileProgram({
+        fragmentShader: GrainFilter
+    })
     /*
         OpenGL coordinate system starts at the bottom left,
         when we render to FBOs this means the output will be flipped.
@@ -101,23 +70,6 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
     const vaoObj = createPlaneVAO(gl, AXISDewarp.bindings);
     const solid = createPlaneVAO(gl, ProjectionShader.bindings);
 
-    const drawVAO = (vao: any, programObject: FCAGLProgramBundle, renderSetup: (gl: WebGL2RenderingContext, bindings: FCAGLUniformType) => void, fbo: FAGLFBOObject | null = null) => {
-        gl.bindFramebuffer(gl.FRAMEBUFFER, fbo ? fbo.fbo : null);
-        if (fbo?.texObject) {
-            gl.viewport(0, 0, fbo.texObject.width, fbo.texObject.height);
-        } else {
-            gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
-        }
-        gl.clearColor(0, 0, 0, 1);
-        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-
-        gl.useProgram(programObject.program);
-        renderSetup(gl, programObject.bindings.uniform!);
-
-        gl.bindVertexArray(vao.vao);
-        gl.drawArrays(gl.TRIANGLES, 0, vao.vertices);
-    }
-
     const createTexture = (w: number, h: number) => {
         const tex = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -129,8 +81,6 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
         return {tex: tex, width: w, height: h};
     }
-
-    type FAGLFBOObject = { fbo: WebGLFramebuffer, texObject: FCAGLTextureObject };
 
     const createFBO = (w: number, h: number): FAGLFBOObject => {
         const textureObject = createTexture(w, h);
@@ -148,6 +98,7 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
     const frameTexture = createTexture(downsample.width, downsample.height);
     const ptzFBO = createFBO(downsample.width, downsample.height);
     const postProcessFBO = createFBO(downsample.width, downsample.height);
+    const casFBO = createFBO(downsample.width, downsample.height);
 
     const sampleVideoFrame = (v: HTMLVideoElement | HTMLCanvasElement) => {
         let offsetX = 0;
@@ -190,7 +141,7 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
             sampleVideoFrame(downsample);
 
             if (dewarpEnabled) {
-                drawVAO(vaoObj, AXISDewarp, (gl, uniform) => {
+                drawVAO(gl, vaoObj, AXISDewarp, (gl, uniform) => {
                     gl.activeTexture(gl.TEXTURE0);
                     gl.bindTexture(gl.TEXTURE_2D, frameTexture.tex);
                     gl.uniform1i(uniform.u_texture.address, 0);
@@ -221,7 +172,7 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
 
                 }, ptzFBO);
             } else {
-                drawVAO(solid, ProjectionShader, (gl, uniform) => {
+                drawVAO(gl, solid, ProjectionShader, (gl, uniform) => {
                     gl.activeTexture(gl.TEXTURE3);
                     gl.bindTexture(gl.TEXTURE_2D, frameTexture.tex);
                     gl.uniform1i(uniform.u_texture.address, 3);
@@ -251,7 +202,7 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
                 }, ptzFBO);
             }
 
-            drawVAO(solid, ProjectionShader, (gl, uniform) => {
+            drawVAO(gl, solid, ProjectionShader, (gl, uniform) => {
                 gl.activeTexture(gl.TEXTURE3);
                 gl.bindTexture(gl.TEXTURE_2D, ptzFBO.texObject.tex);
                 gl.uniform1i(uniform.u_texture.address, 3);
@@ -273,11 +224,30 @@ export const FCAGLConfigurePipeline = (gl: WebGL2RenderingContext, container: HT
                 gl.uniformMatrix4fv(uniform.u_model.address, false, model);
             }, postProcessFBO);
 
-
-            drawVAO(vaoObj, AMDFidelityCAS, (gl, uniform) => {
+            drawVAO(gl, vaoObj, Grain, (gl, uniform) => {
                 gl.activeTexture(gl.TEXTURE2);
                 gl.uniform1i(uniform.u_texture.address, 2);
                 gl.bindTexture(gl.TEXTURE_2D, postProcessFBO.texObject.tex);
+
+                const projection = mat4.create();
+                mat4.identity(projection);
+                mat4.perspective(projection, 90 * Math.PI / 180, postProcessFBO.texObject.height / postProcessFBO.texObject.width, 0.0, 100);
+                gl.uniformMatrix4fv(uniform.u_projection.address, false, projection);
+                const view = mat4.create();
+                mat4.identity(view);
+                mat4.lookAt(view, [0, 0, 1], [0, 0, 0], [0, 1, 0]);
+                gl.uniformMatrix4fv(uniform.u_view.address, false, view);
+
+                const model = mat4.create();
+                mat4.identity(model);
+                gl.uniformMatrix4fv(uniform.u_model.address, false, model);
+                gl.uniform1ui(uniform.u_frame_counter.address, frameCounter);
+            }, casFBO);
+
+            drawVAO(gl, vaoObj, AMDFidelityCAS, (gl, uniform) => {
+                gl.activeTexture(gl.TEXTURE2);
+                gl.uniform1i(uniform.u_texture.address, 2);
+                gl.bindTexture(gl.TEXTURE_2D, casFBO.texObject.tex);
 
                 const projection = mat4.create();
                 mat4.identity(projection);
