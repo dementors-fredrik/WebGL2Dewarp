@@ -10,6 +10,7 @@ import React, {
 } from "react";
 
 import {FCAGLConfigurePipeline} from "./FCAGLDewarpEngine/FCAPipeline";
+import { vec2 } from "gl-matrix";
 
 export const toRad = (deg: number) => deg * Math.PI / 180.0;
 export const toDeg = (rad: number) => rad / Math.PI * 180.0;
@@ -103,32 +104,57 @@ export const VirtualPtzComponent: React.FC<React.PropsWithChildren<{ ref: Ref<Vi
                     }
                 }
 
-                const calcRotationSpeed = (ev: MouseEvent) => {
+                const calcRotationSpeed = (vec: vec2, scale: number) => {
                     const aspect = canvas.height/canvas.width;
-                    dx = -((canvas.width / 2) - ev.clientX)/(((canvas.width*aspect)/4)/uniformBuffer.FOV);
-                    dy = -((canvas.height/ 2) - ev.clientY)/((canvas.height/4)/uniformBuffer.FOV);
-                    return { cDx: dx, cDy: dy};
+                    const scaledVector = vec2.create();
+                    vec2.scale(scaledVector, vec, scale);
+
+                    dx = -((scaledVector[0]/(canvas.width*aspect))*uniformBuffer.FOV);
+                    dy = -((scaledVector[1]/canvas.height)*uniformBuffer.FOV);
+                    return vec2.fromValues(dx, dy);
                 }
 
+
+                let mouseSample = Date.now();
+                let clickVector = vec2.create();
+                let velocityVector = vec2.create();
+
                 container.onmousedown = (ev) => {
+                    mouseSample = Date.now();
                     ev.preventDefault();
-                    sampleMouse = true;
-                    const {cDx, cDy} = calcRotationSpeed(ev);
-                    dx = cDx;
-                    dy = cDy;
+                    clickVector = vec2.fromValues((canvas.width / 2) - ev.clientX,(canvas.height/ 2) - ev.clientY);
+
+                    velocityVector = calcRotationSpeed(clickVector, Math.sqrt(uniformBuffer.FOV*vec2.length(clickVector)));
+
                     const updatePtz = () => {
                         const c = uniformBuffer.rotation;
-                        uniformBuffer.rotation = [toRad(dx)+c[0], toRad(dy)+c[1],c[2]];
+                        uniformBuffer.rotation = [toRad(velocityVector[0])+c[0], toRad(velocityVector[1])+c[1],c[2]];
                         if(sampleMouse) {
                             requestAnimationFrame(updatePtz);
                         }
                     }
+                    sampleMouse = true;
                     requestAnimationFrame(updatePtz);
                 }
 
                 container.onmouseup = (ev) => {
-                    ev.preventDefault();
                     sampleMouse = false;
+                    clickVector = vec2.fromValues((canvas.width / 2) - ev.clientX, (canvas.height/ 2) - ev.clientY);
+
+                    if(Date.now() - mouseSample < 130) {
+                        const clickToCenter = () => {
+                            vec2.scale(clickVector, clickVector, 0.9);
+                            const c = uniformBuffer.rotation;
+                            velocityVector = calcRotationSpeed(clickVector, Math.sqrt(uniformBuffer.FOV*vec2.length(clickVector)));
+                            uniformBuffer.rotation = [(toRad(velocityVector[0]))+c[0], (toRad(velocityVector[1]))+c[1],c[2]];
+                            if(vec2.squaredLength(clickVector) > 1) {
+                                requestAnimationFrame(clickToCenter);
+                            }
+                        }
+                        clickToCenter();
+                    }
+
+                    ev.preventDefault();
                 }
 
                 container.onmouseleave = (ev) => {
@@ -139,9 +165,9 @@ export const VirtualPtzComponent: React.FC<React.PropsWithChildren<{ ref: Ref<Vi
                 container.onmousemove = (ev) => {
                     ev.preventDefault();
                     if (sampleMouse) {
-                        const {cDx, cDy} = calcRotationSpeed(ev);
-                        dx = cDx;
-                        dy = cDy;
+                        const aspect = canvas.height/canvas.width;
+                        clickVector = vec2.fromValues((canvas.width / 2) - ev.clientX,(canvas.height/ 2) - ev.clientY);
+                        velocityVector = calcRotationSpeed(clickVector,Math.sqrt(uniformBuffer.FOV*vec2.length(clickVector)));
                     }
                 }
 
